@@ -8,9 +8,9 @@ import { Clock, Users, CheckCircle, AlertCircle, MessageSquare, BarChart3, FileT
 // 3. Replace these values with your EmailJS credentials
 const EMAIL_CONFIG = {
   enabled: true, // Email is now enabled - make sure to add your credentials below!
-  serviceId: 'YOUR_SERVICE_ID', // REPLACE with your EmailJS service ID (e.g., 'service_abc123')
-  templateId: 'YOUR_TEMPLATE_ID', // REPLACE with your EmailJS template ID (e.g., 'template_xyz789')
-  publicKey: 'YOUR_PUBLIC_KEY', // REPLACE with your EmailJS public key (e.g., 'AbCdEfGhIjKlMnOp')
+  serviceId: 'service_5tvziid', 
+  templateId: 'template_6xd4ukj', 
+  publicKey: 'KAyprVzfJYyG7m017'
 };
 
 // Email Service Functions
