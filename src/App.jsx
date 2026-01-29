@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Clock, Users, CheckCircle, AlertCircle, MessageSquare, BarChart3, FileText, Plus, Send, ThumbsUp, ThumbsDown, User, Settings, LogOut, ChevronRight, X, Mic, MicOff, Mail } from 'lucide-react';
+import { Clock, Users, CheckCircle, AlertCircle, MessageSquare, BarChart3, FileText, Plus, Send, ThumbsUp, ThumbsDown, User, Settings, LogOut, ChevronRight, ChevronDown, ChevronUp, X, Mic, MicOff, Mail, Search, RefreshCw, Trash2, XCircle, ArrowLeft, Loader2 } from 'lucide-react';
 
 // Email Service Configuration
 // To enable email notifications:
@@ -461,6 +461,7 @@ export default function TheArgumentor() {
           }}
           onCreateConflict={() => setView('create-conflict')}
           onRefresh={loadConflicts}
+          onUserManagement={() => setView('user-management')}
         />
       )}
       {view === 'create-conflict' && (
@@ -502,6 +503,14 @@ export default function TheArgumentor() {
               }
             }
           }}
+        />
+      )}
+      {view === 'user-management' && currentUser?.role === 'admin' && (
+        <UserManagementView
+          user={currentUser}
+          conflicts={conflicts}
+          onBack={() => setView('dashboard')}
+          onRefresh={loadConflicts}
         />
       )}
     </div>
@@ -564,6 +573,13 @@ function LoginView({ onLogin, pendingInvite }) {
 
       if (user.password !== password) {
         setError('Incorrect password. Please try again.');
+        setLoading(false);
+        return;
+      }
+
+      // Check if user is deactivated
+      if (user.isActive === false) {
+        setError('Your account has been deactivated. Please contact an administrator.');
         setLoading(false);
         return;
       }
@@ -839,8 +855,734 @@ function LoginView({ onLogin, pendingInvite }) {
   );
 }
 
+// User Management View Component (Admin Only)
+function UserManagementView({ user, conflicts, onBack, onRefresh }) {
+  const [allUsers, setAllUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [showReassignModal, setShowReassignModal] = useState(false);
+  const [reassignData, setReassignData] = useState({ conflict: null, role: null, currentUser: null });
+  const [showAddToConflictModal, setShowAddToConflictModal] = useState(false);
+  const [addToConflictUser, setAddToConflictUser] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterRole, setFilterRole] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [actionLoading, setActionLoading] = useState(null);
+
+  // Load all users from storage
+  useEffect(() => {
+    loadAllUsers();
+  }, []);
+
+  const loadAllUsers = async () => {
+    setLoading(true);
+    try {
+      const userKeys = await storage.list('user:', true);
+      const users = [];
+      for (const key of userKeys.keys || []) {
+        try {
+          const userData = await storage.get(key, true);
+          if (userData?.value) {
+            const parsedUser = typeof userData.value === 'string' 
+              ? JSON.parse(userData.value) 
+              : userData.value;
+            users.push(parsedUser);
+          }
+        } catch (e) {
+          console.error('Error loading user:', key, e);
+        }
+      }
+      setAllUsers(users);
+    } catch (error) {
+      console.error('Error loading users:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Get conflicts for a specific user
+  const getUserConflicts = (userId) => {
+    return conflicts.filter(c => {
+      const isMentee = c.mentees?.some(m => m.id === userId);
+      const isFlyOnWall = c.flyOnWall?.id === userId;
+      const isOmniscient = c.omniscient?.id === userId;
+      const isCreator = c.createdBy === userId;
+      return isMentee || isFlyOnWall || isOmniscient || isCreator;
+    });
+  };
+
+  // Toggle user active status
+  const toggleUserStatus = async (targetUser) => {
+    if (targetUser.id === user.id) {
+      alert("You cannot deactivate your own account!");
+      return;
+    }
+    
+    setActionLoading(targetUser.id);
+    try {
+      const newStatus = targetUser.isActive === false ? true : false;
+      const updatedUser = { ...targetUser, isActive: newStatus };
+      await storage.set(`user:${targetUser.id}`, JSON.stringify(updatedUser), true);
+      
+      // Also update the all-users list for login validation
+      const allUsersList = await storage.get('all-users', true) || [];
+      const updatedAllUsers = allUsersList.map(u => 
+        u.id === targetUser.id ? { ...u, isActive: newStatus } : u
+      );
+      await storage.set('all-users', updatedAllUsers, true);
+      
+      setAllUsers(prev => prev.map(u => 
+        u.id === targetUser.id ? updatedUser : u
+      ));
+    } catch (error) {
+      console.error('Error toggling user status:', error);
+      alert('Failed to update user status');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Change user role
+  const changeUserRole = async (targetUser, newRole) => {
+    if (targetUser.id === user.id && newRole !== 'admin') {
+      if (!confirm("Are you sure you want to remove your own admin privileges?")) {
+        return;
+      }
+    }
+    
+    setActionLoading(targetUser.id);
+    try {
+      const updatedUser = { ...targetUser, role: newRole };
+      await storage.set(`user:${targetUser.id}`, JSON.stringify(updatedUser), true);
+      
+      // Also update the all-users list
+      const allUsersList = await storage.get('all-users', true) || [];
+      const updatedAllUsers = allUsersList.map(u => 
+        u.id === targetUser.id ? { ...u, role: newRole } : u
+      );
+      await storage.set('all-users', updatedAllUsers, true);
+      
+      setAllUsers(prev => prev.map(u => 
+        u.id === targetUser.id ? updatedUser : u
+      ));
+    } catch (error) {
+      console.error('Error changing user role:', error);
+      alert('Failed to update user role');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Remove user from conflict
+  const removeFromConflict = async (conflict, roleType, targetUserId) => {
+    setActionLoading(`${conflict.id}-${roleType}`);
+    try {
+      let updatedConflict = { ...conflict };
+      
+      if (roleType === 'mentee') {
+        updatedConflict.mentees = conflict.mentees.filter(m => m.id !== targetUserId);
+      } else if (roleType === 'flyOnWall') {
+        updatedConflict.flyOnWall = null;
+      } else if (roleType === 'omniscient') {
+        updatedConflict.omniscient = null;
+      }
+      
+      updatedConflict.updatedAt = new Date().toISOString();
+      await storage.set(`conflict:${conflict.id}`, JSON.stringify(updatedConflict), true);
+      
+      // Refresh conflicts
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      console.error('Error removing user from conflict:', error);
+      alert('Failed to remove user from conflict');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Open reassign modal
+  const openReassignModal = (conflict, role, currentUserId) => {
+    setReassignData({ conflict, role, currentUser: currentUserId });
+    setShowReassignModal(true);
+  };
+
+  // Reassign user to conflict
+  const reassignUser = async (newUserId) => {
+    const { conflict, role, currentUser } = reassignData;
+    if (!conflict || !role) return;
+    
+    setActionLoading(`reassign-${conflict.id}`);
+    try {
+      let updatedConflict = { ...conflict };
+      const newUser = allUsers.find(u => u.id === newUserId);
+      
+      if (!newUser) {
+        alert('User not found');
+        return;
+      }
+      
+      if (role === 'mentee') {
+        // Remove current mentee if specified
+        if (currentUser) {
+          updatedConflict.mentees = conflict.mentees.filter(m => m.id !== currentUser);
+        }
+        // Add new mentee
+        if (!updatedConflict.mentees.some(m => m.id === newUserId)) {
+          updatedConflict.mentees.push({
+            id: newUser.id,
+            name: newUser.name,
+            email: newUser.email
+          });
+        }
+      } else if (role === 'flyOnWall') {
+        updatedConflict.flyOnWall = {
+          id: newUser.id,
+          name: newUser.name,
+          email: newUser.email
+        };
+      } else if (role === 'omniscient') {
+        updatedConflict.omniscient = {
+          id: newUser.id,
+          name: newUser.name,
+          email: newUser.email
+        };
+      }
+      
+      updatedConflict.updatedAt = new Date().toISOString();
+      await storage.set(`conflict:${conflict.id}`, JSON.stringify(updatedConflict), true);
+      
+      setShowReassignModal(false);
+      setReassignData({ conflict: null, role: null, currentUser: null });
+      
+      // Refresh conflicts
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      console.error('Error reassigning user:', error);
+      alert('Failed to reassign user');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Add user to conflict
+  const addUserToConflict = async (conflictId, roleInConflict) => {
+    if (!addToConflictUser) return;
+    
+    const conflict = conflicts.find(c => c.id === conflictId);
+    if (!conflict) {
+      alert('Conflict not found');
+      return;
+    }
+    
+    setActionLoading(`add-${conflictId}`);
+    try {
+      let updatedConflict = { ...conflict };
+      
+      if (roleInConflict === 'mentee') {
+        if (!updatedConflict.mentees) updatedConflict.mentees = [];
+        if (!updatedConflict.mentees.some(m => m.id === addToConflictUser.id)) {
+          updatedConflict.mentees.push({
+            id: addToConflictUser.id,
+            name: addToConflictUser.name,
+            email: addToConflictUser.email
+          });
+        }
+      } else if (roleInConflict === 'flyOnWall') {
+        updatedConflict.flyOnWall = {
+          id: addToConflictUser.id,
+          name: addToConflictUser.name,
+          email: addToConflictUser.email
+        };
+      } else if (roleInConflict === 'omniscient') {
+        updatedConflict.omniscient = {
+          id: addToConflictUser.id,
+          name: addToConflictUser.name,
+          email: addToConflictUser.email
+        };
+      }
+      
+      updatedConflict.updatedAt = new Date().toISOString();
+      await storage.set(`conflict:${conflict.id}`, JSON.stringify(updatedConflict), true);
+      
+      setShowAddToConflictModal(false);
+      setAddToConflictUser(null);
+      
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      console.error('Error adding user to conflict:', error);
+      alert('Failed to add user to conflict');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Filter users
+  const filteredUsers = allUsers.filter(u => {
+    const matchesSearch = !searchTerm || 
+      u.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      u.email?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesRole = filterRole === 'all' || u.role === filterRole;
+    const matchesStatus = filterStatus === 'all' || 
+      (filterStatus === 'active' && u.isActive !== false) ||
+      (filterStatus === 'inactive' && u.isActive === false);
+    return matchesSearch && matchesRole && matchesStatus;
+  });
+
+  // Role options
+  const roleOptions = [
+    { value: 'mentee', label: 'Mentee' },
+    { value: 'mentor', label: 'Mentor' },
+    { value: 'fly-on-wall', label: 'Fly on the Wall' },
+    { value: 'omniscient', label: 'Omniscient' },
+    { value: 'admin', label: 'Admin' }
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-amber-50 to-stone-100">
+      {/* Header */}
+      <header className="bg-white border-b border-stone-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="p-2 hover:bg-stone-100 rounded-lg transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5 text-stone-600" />
+            </button>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-stone-800">User Management</h1>
+              <p className="text-xs text-stone-500">Manage users, roles, and conflict assignments</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={loadAllUsers}
+              className="p-2 hover:bg-stone-100 rounded-lg transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className={`w-5 h-5 text-stone-600 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 py-6">
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200">
+            <div className="flex items-center gap-2 text-stone-600 mb-1">
+              <Users className="w-4 h-4" />
+              <span className="text-xs font-medium">Total Users</span>
+            </div>
+            <div className="text-2xl font-bold text-stone-800">{allUsers.length}</div>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200">
+            <div className="flex items-center gap-2 text-green-600 mb-1">
+              <CheckCircle className="w-4 h-4" />
+              <span className="text-xs font-medium">Active</span>
+            </div>
+            <div className="text-2xl font-bold text-green-600">
+              {allUsers.filter(u => u.isActive !== false).length}
+            </div>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200">
+            <div className="flex items-center gap-2 text-red-600 mb-1">
+              <XCircle className="w-4 h-4" />
+              <span className="text-xs font-medium">Inactive</span>
+            </div>
+            <div className="text-2xl font-bold text-red-600">
+              {allUsers.filter(u => u.isActive === false).length}
+            </div>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200">
+            <div className="flex items-center gap-2 text-amber-600 mb-1">
+              <AlertCircle className="w-4 h-4" />
+              <span className="text-xs font-medium">Admins</span>
+            </div>
+            <div className="text-2xl font-bold text-amber-600">
+              {allUsers.filter(u => u.role === 'admin').length}
+            </div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200 mb-6">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-stone-400" />
+                <input
+                  type="text"
+                  placeholder="Search by name or email..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-stone-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+            <select
+              value={filterRole}
+              onChange={(e) => setFilterRole(e.target.value)}
+              className="px-4 py-2 border border-stone-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+            >
+              <option value="all">All Roles</option>
+              {roleOptions.map(r => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
+            </select>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="px-4 py-2 border border-stone-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+            >
+              <option value="all">All Status</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Users List */}
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 text-amber-600 animate-spin" />
+          </div>
+        ) : filteredUsers.length === 0 ? (
+          <div className="bg-white rounded-xl p-8 shadow-sm border border-stone-200 text-center">
+            <Users className="w-12 h-12 text-stone-300 mx-auto mb-3" />
+            <p className="text-stone-500">No users found</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredUsers.map(targetUser => {
+              const userConflicts = getUserConflicts(targetUser.id);
+              const isExpanded = selectedUser === targetUser.id;
+              const isActive = targetUser.isActive !== false;
+              
+              return (
+                <div 
+                  key={targetUser.id}
+                  className={`bg-white rounded-xl shadow-sm border ${isActive ? 'border-stone-200' : 'border-red-200 bg-red-50'}`}
+                >
+                  {/* User Row */}
+                  <div className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-medium ${isActive ? 'bg-amber-500' : 'bg-stone-400'}`}>
+                          {targetUser.name?.charAt(0)?.toUpperCase() || '?'}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-stone-800 truncate">{targetUser.name}</span>
+                            {targetUser.id === user.id && (
+                              <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">You</span>
+                            )}
+                            {!isActive && (
+                              <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Inactive</span>
+                            )}
+                          </div>
+                          <div className="text-sm text-stone-500 truncate">{targetUser.email}</div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-2 ml-4">
+                        {/* Role Dropdown */}
+                        <select
+                          value={targetUser.role || 'mentee'}
+                          onChange={(e) => changeUserRole(targetUser, e.target.value)}
+                          disabled={actionLoading === targetUser.id}
+                          className="px-3 py-1.5 text-sm border border-stone-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent disabled:opacity-50"
+                        >
+                          {roleOptions.map(r => (
+                            <option key={r.value} value={r.value}>{r.label}</option>
+                          ))}
+                        </select>
+                        
+                        {/* Toggle Active */}
+                        <button
+                          onClick={() => toggleUserStatus(targetUser)}
+                          disabled={actionLoading === targetUser.id || targetUser.id === user.id}
+                          className={`p-2 rounded-lg transition-colors disabled:opacity-50 ${
+                            isActive 
+                              ? 'hover:bg-red-50 text-red-600' 
+                              : 'hover:bg-green-50 text-green-600'
+                          }`}
+                          title={isActive ? 'Deactivate User' : 'Activate User'}
+                        >
+                          {actionLoading === targetUser.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : isActive ? (
+                            <XCircle className="w-4 h-4" />
+                          ) : (
+                            <CheckCircle className="w-4 h-4" />
+                          )}
+                        </button>
+                        
+                        {/* Expand/Collapse */}
+                        <button
+                          onClick={() => setSelectedUser(isExpanded ? null : targetUser.id)}
+                          className="p-2 hover:bg-stone-100 rounded-lg transition-colors"
+                        >
+                          {isExpanded ? (
+                            <ChevronUp className="w-4 h-4 text-stone-600" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-stone-600" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {/* Quick Stats */}
+                    <div className="flex gap-4 mt-3 text-xs text-stone-500">
+                      <span>{userConflicts.length} conflict{userConflicts.length !== 1 ? 's' : ''}</span>
+                      <span>Joined {new Date(targetUser.createdAt || Date.now()).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                  
+                  {/* Expanded: User's Conflicts */}
+                  {isExpanded && (
+                    <div className="border-t border-stone-200 p-4 bg-stone-50">
+                      <h4 className="font-medium text-stone-700 mb-3">Assigned Conflicts</h4>
+                      {userConflicts.length === 0 ? (
+                        <p className="text-sm text-stone-500">No conflicts assigned</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {userConflicts.map(conflict => {
+                            const isMentee = conflict.mentees?.some(m => m.id === targetUser.id);
+                            const isFlyOnWall = conflict.flyOnWall?.id === targetUser.id;
+                            const isOmniscient = conflict.omniscient?.id === targetUser.id;
+                            const isCreator = conflict.createdBy === targetUser.id;
+                            
+                            const roles = [];
+                            if (isCreator) roles.push('Creator');
+                            if (isMentee) roles.push('Mentee');
+                            if (isFlyOnWall) roles.push('Fly on Wall');
+                            if (isOmniscient) roles.push('Omniscient');
+                            
+                            return (
+                              <div 
+                                key={conflict.id}
+                                className="bg-white rounded-lg p-3 border border-stone-200"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium text-stone-800 truncate">{conflict.title}</div>
+                                    <div className="text-xs text-stone-500 mt-1">
+                                      {roles.join(' • ')} | {conflict.status || 'In Progress'}
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-1">
+                                    {/* Reassign Button */}
+                                    {(isMentee || isFlyOnWall || isOmniscient) && !isCreator && (
+                                      <button
+                                        onClick={() => openReassignModal(
+                                          conflict,
+                                          isMentee ? 'mentee' : isFlyOnWall ? 'flyOnWall' : 'omniscient',
+                                          targetUser.id
+                                        )}
+                                        className="p-1.5 hover:bg-amber-50 text-amber-600 rounded transition-colors"
+                                        title="Reassign"
+                                      >
+                                        <RefreshCw className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                    {/* Remove Button */}
+                                    {(isMentee || isFlyOnWall || isOmniscient) && !isCreator && (
+                                      <button
+                                        onClick={() => removeFromConflict(
+                                          conflict,
+                                          isMentee ? 'mentee' : isFlyOnWall ? 'flyOnWall' : 'omniscient',
+                                          targetUser.id
+                                        )}
+                                        disabled={actionLoading === `${conflict.id}-${isMentee ? 'mentee' : isFlyOnWall ? 'flyOnWall' : 'omniscient'}`}
+                                        className="p-1.5 hover:bg-red-50 text-red-600 rounded transition-colors disabled:opacity-50"
+                                        title="Remove from Conflict"
+                                      >
+                                        {actionLoading === `${conflict.id}-${isMentee ? 'mentee' : isFlyOnWall ? 'flyOnWall' : 'omniscient'}` ? (
+                                          <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                          <Trash2 className="w-4 h-4" />
+                                        )}
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      
+                      {/* Add to Conflict Button */}
+                      <button
+                        onClick={() => {
+                          setAddToConflictUser(targetUser);
+                          setShowAddToConflictModal(true);
+                        }}
+                        className="mt-4 flex items-center gap-2 text-sm text-amber-600 hover:text-amber-700 font-medium"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add to Conflict
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Reassign Modal */}
+      {showReassignModal && reassignData.conflict && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[80vh] overflow-hidden">
+            <div className="p-4 border-b border-stone-200">
+              <h3 className="font-semibold text-stone-800">Reassign User</h3>
+              <p className="text-sm text-stone-500 mt-1">
+                Select a new user for the {reassignData.role === 'flyOnWall' ? 'Fly on Wall' : reassignData.role} role in "{reassignData.conflict.title}"
+              </p>
+            </div>
+            <div className="p-4 max-h-96 overflow-y-auto">
+              <div className="space-y-2">
+                {allUsers
+                  .filter(u => {
+                    // Don't show the current user being replaced
+                    if (u.id === reassignData.currentUser) return false;
+                    // Don't show inactive users
+                    if (u.isActive === false) return false;
+                    // For mentee role, don't show users already in the conflict as mentees
+                    if (reassignData.role === 'mentee' && reassignData.conflict.mentees?.some(m => m.id === u.id)) return false;
+                    return true;
+                  })
+                  .map(u => (
+                    <button
+                      key={u.id}
+                      onClick={() => reassignUser(u.id)}
+                      disabled={actionLoading === `reassign-${reassignData.conflict.id}`}
+                      className="w-full flex items-center gap-3 p-3 hover:bg-stone-50 rounded-lg border border-stone-200 transition-colors disabled:opacity-50"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-amber-500 flex items-center justify-center text-white font-medium">
+                        {u.name?.charAt(0)?.toUpperCase() || '?'}
+                      </div>
+                      <div className="text-left flex-1">
+                        <div className="font-medium text-stone-800">{u.name}</div>
+                        <div className="text-xs text-stone-500">{u.email}</div>
+                      </div>
+                      <div className="text-xs text-stone-400 capitalize">{u.role}</div>
+                    </button>
+                  ))
+                }
+              </div>
+            </div>
+            <div className="p-4 border-t border-stone-200 flex justify-end">
+              <button
+                onClick={() => {
+                  setShowReassignModal(false);
+                  setReassignData({ conflict: null, role: null, currentUser: null });
+                }}
+                className="px-4 py-2 text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add to Conflict Modal */}
+      {showAddToConflictModal && addToConflictUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-hidden">
+            <div className="p-4 border-b border-stone-200">
+              <h3 className="font-semibold text-stone-800">Add {addToConflictUser.name} to a Conflict</h3>
+              <p className="text-sm text-stone-500 mt-1">
+                Select a conflict and role to assign this user
+              </p>
+            </div>
+            <div className="p-4 max-h-96 overflow-y-auto">
+              {conflicts.length === 0 ? (
+                <p className="text-stone-500 text-center py-4">No conflicts available</p>
+              ) : (
+                <div className="space-y-3">
+                  {conflicts.map(conflict => {
+                    const isAlreadyMentee = conflict.mentees?.some(m => m.id === addToConflictUser.id);
+                    const isAlreadyFlyOnWall = conflict.flyOnWall?.id === addToConflictUser.id;
+                    const isAlreadyOmniscient = conflict.omniscient?.id === addToConflictUser.id;
+                    const isCreator = conflict.createdBy === addToConflictUser.id;
+                    
+                    return (
+                      <div key={conflict.id} className="border border-stone-200 rounded-lg p-4">
+                        <div className="font-medium text-stone-800 mb-1">{conflict.title}</div>
+                        <div className="text-xs text-stone-500 mb-3">
+                          {conflict.mentees?.length || 0} mentees • {conflict.status || 'In Progress'}
+                        </div>
+                        
+                        {isCreator ? (
+                          <div className="text-xs text-amber-600">User is the creator of this conflict</div>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() => addUserToConflict(conflict.id, 'mentee')}
+                              disabled={isAlreadyMentee || actionLoading === `add-${conflict.id}`}
+                              className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
+                                isAlreadyMentee 
+                                  ? 'bg-stone-100 text-stone-400 cursor-not-allowed' 
+                                  : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                              }`}
+                            >
+                              {isAlreadyMentee ? '✓ Mentee' : '+ Add as Mentee'}
+                            </button>
+                            <button
+                              onClick={() => addUserToConflict(conflict.id, 'flyOnWall')}
+                              disabled={isAlreadyFlyOnWall || actionLoading === `add-${conflict.id}`}
+                              className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
+                                isAlreadyFlyOnWall 
+                                  ? 'bg-stone-100 text-stone-400 cursor-not-allowed' 
+                                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                              }`}
+                            >
+                              {isAlreadyFlyOnWall ? '✓ Fly on Wall' : '+ Fly on Wall'}
+                            </button>
+                            <button
+                              onClick={() => addUserToConflict(conflict.id, 'omniscient')}
+                              disabled={isAlreadyOmniscient || actionLoading === `add-${conflict.id}`}
+                              className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
+                                isAlreadyOmniscient 
+                                  ? 'bg-stone-100 text-stone-400 cursor-not-allowed' 
+                                  : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                              }`}
+                            >
+                              {isAlreadyOmniscient ? '✓ Omniscient' : '+ Omniscient'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-stone-200 flex justify-end">
+              <button
+                onClick={() => {
+                  setShowAddToConflictModal(false);
+                  setAddToConflictUser(null);
+                }}
+                className="px-4 py-2 text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Dashboard View Component
-function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateConflict, onRefresh }) {
+function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateConflict, onRefresh, onUserManagement }) {
   const [filter, setFilter] = useState(null);
 
   // Reload conflicts when dashboard mounts
@@ -905,6 +1647,16 @@ function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateCo
           </div>
 
           <div className="flex items-center gap-4">
+            {user.role === 'admin' && (
+              <button
+                onClick={onUserManagement}
+                className="flex items-center gap-2 bg-stone-700 hover:bg-stone-800 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                title="Manage Users"
+              >
+                <Users className="w-4 h-4" />
+                <span className="hidden sm:inline">Manage Users</span>
+              </button>
+            )}
             <div className="text-right">
               <div className="text-sm font-medium text-stone-700">{user.name}</div>
               <div className="text-xs text-stone-500 capitalize">{user.role.replace('-', ' ')}</div>
