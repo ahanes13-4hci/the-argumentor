@@ -8,9 +8,9 @@ import { Clock, Users, CheckCircle, AlertCircle, MessageSquare, BarChart3, FileT
 // 3. Replace these values with your EmailJS credentials
 const EMAIL_CONFIG = {
   enabled: true, // Email is now enabled - make sure to add your credentials below!
-  serviceId: 'service_5tvziid', 
-  templateId: 'template_6xd4ukj', 
-  publicKey: 'KAyprVzfJYyG7m017'
+  serviceId: 'YOUR_SERVICE_ID', // REPLACE with your EmailJS service ID (e.g., 'service_abc123')
+  templateId: 'YOUR_TEMPLATE_ID', // REPLACE with your EmailJS template ID (e.g., 'template_xyz789')
+  publicKey: 'YOUR_PUBLIC_KEY', // REPLACE with your EmailJS public key (e.g., 'AbCdEfGhIjKlMnOp')
 };
 
 // Email Service Functions
@@ -167,12 +167,17 @@ const VoiceInputButton = ({ onResult, className = '' }) => {
 };
 
 // Utility function for persistent storage
+// Conflicts use shared=true so all participants can see them
+// User data uses shared=false for privacy
 const storage = {
-  get: async (key) => {
+  get: async (key, shared = null) => {
     try {
+      // Determine if this should be shared (conflicts are shared, user data is not)
+      const isShared = shared !== null ? shared : key.startsWith('conflict:');
+      
       // Try window.storage first
       if (window.storage && window.storage.get) {
-        const result = await window.storage.get(key);
+        const result = await window.storage.get(key, isShared);
         return result ? JSON.parse(result.value) : null;
       }
       // Fallback to localStorage
@@ -183,11 +188,14 @@ const storage = {
       return null;
     }
   },
-  set: async (key, value) => {
+  set: async (key, value, shared = null) => {
     try {
+      // Determine if this should be shared (conflicts are shared, user data is not)
+      const isShared = shared !== null ? shared : key.startsWith('conflict:');
+      
       // Try window.storage first
       if (window.storage && window.storage.set) {
-        await window.storage.set(key, JSON.stringify(value));
+        await window.storage.set(key, JSON.stringify(value), isShared);
         return true;
       }
       // Fallback to localStorage
@@ -198,11 +206,14 @@ const storage = {
       return false;
     }
   },
-  list: async (prefix) => {
+  list: async (prefix, shared = null) => {
     try {
+      // Determine if this should be shared (conflicts are shared, user data is not)
+      const isShared = shared !== null ? shared : prefix.startsWith('conflict:');
+      
       // Try window.storage first
       if (window.storage && window.storage.list) {
-        const result = await window.storage.list(prefix);
+        const result = await window.storage.list(prefix, isShared);
         return result?.keys || [];
       }
       // Fallback to localStorage
@@ -487,9 +498,9 @@ function LoginView({ onLogin, pendingInvite }) {
     setLoading(true);
 
     try {
-      // Get all users from storage
+      // Get all users from storage (shared so users can log in from anywhere)
       console.log('Fetching all users...');
-      const allUsers = await storage.get('all-users') || [];
+      const allUsers = await storage.get('all-users', true) || [];
       console.log('All users:', allUsers);
       
       // Find user by email
@@ -539,9 +550,9 @@ function LoginView({ onLogin, pendingInvite }) {
         return;
       }
 
-      // Get existing users
+      // Get existing users (shared so users can log in from anywhere)
       console.log('Fetching existing users...');
-      const allUsers = await storage.get('all-users') || [];
+      const allUsers = await storage.get('all-users', true) || [];
       console.log('Existing users:', allUsers);
       
       // Check if email already exists
@@ -562,10 +573,10 @@ function LoginView({ onLogin, pendingInvite }) {
       };
       console.log('New user created:', newUser);
 
-      // Save to all users
+      // Save to all users (shared)
       const updatedUsers = [...allUsers, newUser];
       console.log('Saving updated users:', updatedUsers);
-      const saved = await storage.set('all-users', updatedUsers);
+      const saved = await storage.set('all-users', updatedUsers, true);
       console.log('Users saved successfully:', saved);
 
       // Login the new user
