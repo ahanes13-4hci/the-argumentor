@@ -1036,7 +1036,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
     try {
       const newStatus = targetUser.isActive === false ? true : false;
       const updatedUser = { ...targetUser, isActive: newStatus };
-      await storage.set(`user:${targetUser.id}`, JSON.stringify(updatedUser), true);
+      await storage.set(`user:${targetUser.id}`, updatedUser, true);
       
       // Also update the all-users list for login validation
       const allUsersList = await storage.get('all-users', true) || [];
@@ -1067,7 +1067,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
     setActionLoading(targetUser.id);
     try {
       const updatedUser = { ...targetUser, role: newRole };
-      await storage.set(`user:${targetUser.id}`, JSON.stringify(updatedUser), true);
+      await storage.set(`user:${targetUser.id}`, updatedUser, true);
       
       // Also update the all-users list
       const allUsersList = await storage.get('all-users', true) || [];
@@ -1102,7 +1102,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
       }
       
       updatedConflict.updatedAt = new Date().toISOString();
-      await storage.set(`conflict:${conflict.id}`, JSON.stringify(updatedConflict), true);
+      await storage.set(`conflict:${conflict.id}`, updatedConflict, true);
       
       // Refresh conflicts
       if (onRefresh) onRefresh();
@@ -1163,7 +1163,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
       }
       
       updatedConflict.updatedAt = new Date().toISOString();
-      await storage.set(`conflict:${conflict.id}`, JSON.stringify(updatedConflict), true);
+      await storage.set(`conflict:${conflict.id}`, updatedConflict, true);
       
       setShowReassignModal(false);
       setReassignData({ conflict: null, role: null, currentUser: null });
@@ -1216,7 +1216,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
       }
       
       updatedConflict.updatedAt = new Date().toISOString();
-      await storage.set(`conflict:${conflict.id}`, JSON.stringify(updatedConflict), true);
+      await storage.set(`conflict:${conflict.id}`, updatedConflict, true);
       
       setShowAddToConflictModal(false);
       setAddToConflictUser(null);
