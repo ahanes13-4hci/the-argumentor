@@ -1367,7 +1367,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
 
       <div className="max-w-7xl mx-auto px-3 sm:px-6 py-6">
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
           <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200">
             <div className="flex items-center gap-2 text-stone-600 mb-1">
               <Users className="w-4 h-4" />
@@ -1401,6 +1401,13 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
             <div className="text-2xl font-bold text-amber-600">
               {allUsers.filter(u => u.role === 'admin').length}
             </div>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200">
+            <div className="flex items-center gap-2 text-blue-600 mb-1">
+              <FileText className="w-4 h-4" />
+              <span className="text-xs font-medium">Conflicts</span>
+            </div>
+            <div className="text-2xl font-bold text-blue-600">{allConflicts.length}</div>
           </div>
         </div>
 
