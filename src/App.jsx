@@ -247,7 +247,15 @@ const storage = {
       
       // Get private conflicts
       const privateResult = await window.storage.list('conflict:', false);
-      const privateKeys = privateResult?.keys || [];
+      console.log('Private result raw:', privateResult);
+      
+      // Handle different response formats
+      let privateKeys = [];
+      if (Array.isArray(privateResult)) {
+        privateKeys = privateResult;
+      } else if (privateResult?.keys) {
+        privateKeys = privateResult.keys;
+      }
       console.log('Found private conflicts:', privateKeys.length);
       
       let migrated = 0;
@@ -256,11 +264,16 @@ const storage = {
           // Get from private storage
           const privateData = await window.storage.get(key, false);
           if (privateData && privateData.value) {
-            const conflict = JSON.parse(privateData.value);
-            
             // Check if already exists in shared storage
-            const sharedData = await window.storage.get(key, true);
-            if (!sharedData) {
+            let existsInShared = false;
+            try {
+              const sharedData = await window.storage.get(key, true);
+              existsInShared = !!sharedData;
+            } catch (e) {
+              // Key doesn't exist in shared
+            }
+            
+            if (!existsInShared) {
               // Copy to shared storage
               await window.storage.set(key, privateData.value, true);
               console.log(`Migrated ${key} to shared storage`);
@@ -1303,6 +1316,37 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                setActionLoading('sync');
+                try {
+                  // Run migrations
+                  const conflictResult = await storage.migrateConflictsToShared();
+                  const userResult = await storage.migrateUsersToShared();
+                  console.log('Sync results:', { conflictResult, userResult });
+                  
+                  // Reload data
+                  await reloadData();
+                  
+                  alert(`Sync complete!\nConflicts migrated: ${conflictResult.migrated}\nUsers migrated: ${userResult.migrated}`);
+                } catch (error) {
+                  console.error('Sync error:', error);
+                  alert('Sync failed. Check console for details.');
+                } finally {
+                  setActionLoading(null);
+                }
+              }}
+              disabled={actionLoading === 'sync'}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+              title="Sync data from private to shared storage"
+            >
+              {actionLoading === 'sync' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              <span className="hidden sm:inline">Sync Data</span>
+            </button>
             <button
               onClick={() => setShowCreateUserModal(true)}
               className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
