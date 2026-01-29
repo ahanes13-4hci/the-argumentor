@@ -172,8 +172,9 @@ const VoiceInputButton = ({ onResult, className = '' }) => {
 const storage = {
   get: async (key, shared = null) => {
     try {
-      // Determine if this should be shared (conflicts are shared, user data is not)
-      const isShared = shared !== null ? shared : key.startsWith('conflict:');
+      // Determine if this should be shared
+      // conflicts and all-users are shared so users can collaborate
+      const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
       
       // Try window.storage first
       if (window.storage && window.storage.get) {
@@ -190,8 +191,9 @@ const storage = {
   },
   set: async (key, value, shared = null) => {
     try {
-      // Determine if this should be shared (conflicts are shared, user data is not)
-      const isShared = shared !== null ? shared : key.startsWith('conflict:');
+      // Determine if this should be shared
+      // conflicts and all-users are shared so users can collaborate
+      const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
       
       // Try window.storage first
       if (window.storage && window.storage.set) {
@@ -208,8 +210,9 @@ const storage = {
   },
   list: async (prefix, shared = null) => {
     try {
-      // Determine if this should be shared (conflicts are shared, user data is not)
-      const isShared = shared !== null ? shared : prefix.startsWith('conflict:');
+      // Determine if this should be shared
+      // conflicts and all-users are shared so users can collaborate
+      const isShared = shared !== null ? shared : (prefix.startsWith('conflict:') || prefix === 'all-users');
       
       // Try window.storage first
       if (window.storage && window.storage.list) {
@@ -273,6 +276,59 @@ const storage = {
       console.error('Migration error:', error);
       return { migrated: 0, error };
     }
+  },
+  // Migration: Copy users from private to shared storage
+  migrateUsersToShared: async () => {
+    try {
+      if (!window.storage) {
+        console.log('No window.storage available, skipping user migration');
+        return { migrated: 0 };
+      }
+      
+      // Check if there are users in private storage
+      const privateUsers = await window.storage.get('all-users', false);
+      if (!privateUsers || !privateUsers.value) {
+        console.log('No private users to migrate');
+        return { migrated: 0 };
+      }
+      
+      const privateUserList = JSON.parse(privateUsers.value);
+      if (!privateUserList || privateUserList.length === 0) {
+        console.log('Private user list is empty');
+        return { migrated: 0 };
+      }
+      
+      // Get existing shared users
+      let sharedUsers = [];
+      try {
+        const sharedResult = await window.storage.get('all-users', true);
+        if (sharedResult && sharedResult.value) {
+          sharedUsers = JSON.parse(sharedResult.value);
+        }
+      } catch (e) {
+        console.log('No existing shared users');
+      }
+      
+      // Merge: add private users that don't exist in shared
+      let merged = 0;
+      for (const privateUser of privateUserList) {
+        const existsInShared = sharedUsers.some(su => su.email?.toLowerCase() === privateUser.email?.toLowerCase());
+        if (!existsInShared) {
+          sharedUsers.push(privateUser);
+          merged++;
+        }
+      }
+      
+      if (merged > 0) {
+        await window.storage.set('all-users', JSON.stringify(sharedUsers), true);
+        console.log(`User migration complete: ${merged} users migrated to shared storage`);
+      }
+      
+      return { migrated: merged, total: privateUserList.length };
+    } catch (error) {
+      console.error('User migration error:', error);
+      return { migrated: 0, error };
+    }
   }
 };
 
@@ -317,6 +373,11 @@ export default function TheArgumentor() {
       console.log('Running conflict migration...');
       const migrationResult = await storage.migrateConflictsToShared();
       console.log('Migration result:', migrationResult);
+      
+      // Run migration to copy private users to shared storage
+      console.log('Running user migration...');
+      const userMigrationResult = await storage.migrateUsersToShared();
+      console.log('User migration result:', userMigrationResult);
       
       const user = await storage.get('current-user');
       if (user) {
@@ -864,6 +925,8 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
   const [reassignData, setReassignData] = useState({ conflict: null, role: null, currentUser: null });
   const [showAddToConflictModal, setShowAddToConflictModal] = useState(false);
   const [addToConflictUser, setAddToConflictUser] = useState(null);
+  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
+  const [newUserData, setNewUserData] = useState({ name: '', email: '', password: '', role: 'mentee' });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -1104,6 +1167,59 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
     }
   };
 
+  // Create new user (admin function)
+  const createUser = async () => {
+    const { name, email, password, role } = newUserData;
+    
+    if (!name.trim() || !email.trim() || !password.trim()) {
+      alert('Please fill in all fields');
+      return;
+    }
+    
+    if (password.length < 6) {
+      alert('Password must be at least 6 characters');
+      return;
+    }
+    
+    // Check if email already exists
+    if (allUsers.some(u => u.email.toLowerCase() === email.toLowerCase())) {
+      alert('A user with this email already exists');
+      return;
+    }
+    
+    setActionLoading('create-user');
+    try {
+      const newUser = {
+        id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        password: password,
+        role: role,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        createdBy: user.id
+      };
+      
+      // Add to all-users list (shared storage for login)
+      const updatedAllUsers = [...allUsers, newUser];
+      await storage.set('all-users', updatedAllUsers, true);
+      
+      // Update local state
+      setAllUsers(updatedAllUsers);
+      
+      // Reset form and close modal
+      setNewUserData({ name: '', email: '', password: '', role: 'mentee' });
+      setShowCreateUserModal(false);
+      
+      alert(`User "${newUser.name}" created successfully!`);
+    } catch (error) {
+      console.error('Error creating user:', error);
+      alert('Failed to create user');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   // Filter users
   const filteredUsers = allUsers.filter(u => {
     const matchesSearch = !searchTerm || 
@@ -1143,6 +1259,13 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowCreateUserModal(true)}
+              className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Create User</span>
+            </button>
             <button
               onClick={loadAllUsers}
               className="p-2 hover:bg-stone-100 rounded-lg transition-colors"
@@ -1560,6 +1683,92 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
                 className="px-4 py-2 text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create User Modal */}
+      {showCreateUserModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+            <div className="p-4 border-b border-stone-200">
+              <h3 className="font-semibold text-stone-800">Create New User</h3>
+              <p className="text-sm text-stone-500 mt-1">
+                Add a new user to the system
+              </p>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">Full Name</label>
+                <input
+                  type="text"
+                  value={newUserData.name}
+                  onChange={(e) => setNewUserData(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="Enter full name"
+                  className="w-full px-4 py-2 border border-stone-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">Email Address</label>
+                <input
+                  type="email"
+                  value={newUserData.email}
+                  onChange={(e) => setNewUserData(prev => ({ ...prev, email: e.target.value }))}
+                  placeholder="Enter email address"
+                  className="w-full px-4 py-2 border border-stone-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">Password</label>
+                <input
+                  type="password"
+                  value={newUserData.password}
+                  onChange={(e) => setNewUserData(prev => ({ ...prev, password: e.target.value }))}
+                  placeholder="Minimum 6 characters"
+                  className="w-full px-4 py-2 border border-stone-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1">Role</label>
+                <select
+                  value={newUserData.role}
+                  onChange={(e) => setNewUserData(prev => ({ ...prev, role: e.target.value }))}
+                  className="w-full px-4 py-2 border border-stone-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                >
+                  {roleOptions.map(r => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="p-4 border-t border-stone-200 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowCreateUserModal(false);
+                  setNewUserData({ name: '', email: '', password: '', role: 'mentee' });
+                }}
+                className="px-4 py-2 text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createUser}
+                disabled={actionLoading === 'create-user'}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {actionLoading === 'create-user' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4" />
+                    Create User
+                  </>
+                )}
               </button>
             </div>
           </div>
