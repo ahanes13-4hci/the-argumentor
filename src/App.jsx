@@ -217,6 +217,10 @@ const storage = {
       // Try window.storage first
       if (window.storage && window.storage.list) {
         const result = await window.storage.list(prefix, isShared);
+        // Handle both array and object with keys property
+        if (Array.isArray(result)) {
+          return result;
+        }
         return result?.keys || [];
       }
       // Fallback to localStorage
@@ -919,7 +923,7 @@ function LoginView({ onLogin, pendingInvite }) {
 // User Management View Component (Admin Only)
 function UserManagementView({ user, conflicts, onBack, onRefresh }) {
   const [allUsers, setAllUsers] = useState([]);
-  const [allConflicts, setAllConflicts] = useState([]); // All conflicts for admin assignment
+  const [allConflicts, setAllConflicts] = useState(conflicts || []); // Initialize with passed conflicts
   const [loading, setLoading] = useState(true);
   const [selectedUser, setSelectedUser] = useState(null);
   const [showReassignModal, setShowReassignModal] = useState(false);
@@ -938,30 +942,45 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
     loadAllData();
   }, []);
 
+  // Update allConflicts when conflicts prop changes
+  useEffect(() => {
+    if (conflicts && conflicts.length > 0) {
+      setAllConflicts(conflicts);
+    }
+  }, [conflicts]);
+
   const loadAllData = async () => {
     setLoading(true);
     try {
       // Load all users
       const allUsersList = await storage.get('all-users', true) || [];
       console.log('Loaded users:', allUsersList);
-      setAllUsers(allUsersList);
+      setAllUsers(Array.isArray(allUsersList) ? allUsersList : []);
       
       // Load ALL conflicts from shared storage (admin sees everything)
-      const conflictKeys = await storage.list('conflict:', true);
-      console.log('Found conflict keys:', conflictKeys);
-      const loadedConflicts = [];
-      for (const key of conflictKeys) {
-        try {
-          const conflict = await storage.get(key, true);
-          if (conflict) {
-            loadedConflicts.push(conflict);
+      try {
+        const conflictKeys = await storage.list('conflict:', true);
+        console.log('Found conflict keys:', conflictKeys);
+        const loadedConflicts = [];
+        const keysArray = Array.isArray(conflictKeys) ? conflictKeys : [];
+        for (const key of keysArray) {
+          try {
+            const conflict = await storage.get(key, true);
+            if (conflict) {
+              loadedConflicts.push(conflict);
+            }
+          } catch (e) {
+            console.error('Error loading conflict:', key, e);
           }
-        } catch (e) {
-          console.error('Error loading conflict:', key, e);
         }
+        console.log('Loaded all conflicts for admin:', loadedConflicts);
+        if (loadedConflicts.length > 0) {
+          setAllConflicts(loadedConflicts);
+        }
+      } catch (conflictError) {
+        console.error('Error loading conflicts, using passed conflicts:', conflictError);
+        // Fall back to passed conflicts prop
       }
-      console.log('Loaded all conflicts for admin:', loadedConflicts);
-      setAllConflicts(loadedConflicts);
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
