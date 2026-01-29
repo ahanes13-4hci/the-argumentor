@@ -414,8 +414,8 @@ export default function TheArgumentor() {
   const loadConflicts = async (retryCount = 0) => {
     console.log('=== loadConflicts() START ===', 'retry:', retryCount);
     try {
-      console.log('Step 1: Listing conflict keys...');
-      const keys = await storage.list('conflict:');
+      console.log('Step 1: Listing conflict keys from SHARED storage...');
+      const keys = await storage.list('conflict:', true);
       console.log('Step 2: Found keys:', keys);
       console.log('Step 2a: Number of keys:', keys.length);
       console.log('Step 2b: Type of keys:', typeof keys, Array.isArray(keys));
@@ -429,8 +429,8 @@ export default function TheArgumentor() {
       console.log('Step 3: Fetching conflict data for each key...');
       const conflictPromises = keys.map(async (key) => {
         try {
-          console.log(`  -> Fetching ${key}...`);
-          const data = await storage.get(key);
+          console.log(`  -> Fetching ${key} from SHARED storage...`);
+          const data = await storage.get(key, true);
           console.log(`  -> Got data for ${key}:`, data);
           return data;
         } catch (error) {
