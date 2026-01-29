@@ -1171,7 +1171,7 @@ function CreateConflictView({ user, onBack, onCreated }) {
                 conflictDescription: formData.what
               });
               console.log(`Email invitation sent to ${toEmail}:`, result);
-              return { email: toEmail, success: true, result };
+              return { email: toEmail, success: result.success, result };
             } catch (error) {
               console.error(`Failed to send email to ${toEmail}:`, error);
               return { email: toEmail, success: false, error };
@@ -1181,6 +1181,25 @@ function CreateConflictView({ user, onBack, onCreated }) {
         // Wait for all emails to be sent (but don't block on failures)
         const emailResults = await Promise.allSettled(emailPromises);
         console.log('Email sending results:', emailResults);
+        
+        // Update conflict with email sent timestamps
+        const updatedMentees = conflict.mentees.map(mentee => {
+          const emailResult = emailResults.find(r => 
+            r.status === 'fulfilled' && r.value.email.toLowerCase() === mentee.email.toLowerCase()
+          );
+          if (emailResult && emailResult.value.success) {
+            return {
+              ...mentee,
+              lastEmailSent: new Date().toISOString(),
+              emailSentCount: 1
+            };
+          }
+          return mentee;
+        });
+        
+        // Save updated conflict with email timestamps
+        const conflictWithEmailInfo = { ...conflict, mentees: updatedMentees };
+        await storage.set(`conflict:${conflict.id}`, conflictWithEmailInfo);
         
         // Show summary if emails were configured
         if (EMAIL_CONFIG.enabled) {
@@ -2170,6 +2189,114 @@ function ConflictOverview({ conflict, user, onUpdate }) {
   const [showAddParticipant, setShowAddParticipant] = useState(false);
   const [newParticipantEmail, setNewParticipantEmail] = useState('');
   const [addingParticipant, setAddingParticipant] = useState(false);
+  const [resendingEmails, setResendingEmails] = useState(false);
+
+  // Check if resend is available (30 minutes after last send)
+  const canResendEmails = () => {
+    if (conflict.createdBy !== user.id) return false; // Only creator can resend
+    
+    const now = new Date();
+    const thirtyMinutesAgo = new Date(now.getTime() - 30 * 60 * 1000);
+    
+    // Find mentees who haven't responded and whose last email was sent > 30 min ago
+    const menteesNeedingResend = conflict.mentees?.filter(mentee => {
+      // Skip if this is the creator
+      if (mentee.id === conflict.createdBy) return false;
+      
+      // Check if they've responded (accepted terms or participated)
+      const hasResponded = conflict.termsAcceptance?.acceptedBy?.includes(mentee.id) ||
+                          conflict.steps?.identifyDefine?.data?.[mentee.id];
+      
+      if (hasResponded) return false;
+      
+      // Check if 30 minutes have passed since last email
+      if (!mentee.lastEmailSent) return true; // Never sent, can send now
+      
+      const lastSent = new Date(mentee.lastEmailSent);
+      return lastSent < thirtyMinutesAgo;
+    }) || [];
+    
+    return menteesNeedingResend.length > 0;
+  };
+
+  const handleResendEmails = async () => {
+    setResendingEmails(true);
+    
+    try {
+      const now = new Date();
+      const thirtyMinutesAgo = new Date(now.getTime() - 30 * 60 * 1000);
+      
+      // Find mentees who need resend
+      const menteesToResend = conflict.mentees?.filter(mentee => {
+        if (mentee.id === conflict.createdBy) return false;
+        
+        const hasResponded = conflict.termsAcceptance?.acceptedBy?.includes(mentee.id) ||
+                            conflict.steps?.identifyDefine?.data?.[mentee.id];
+        
+        if (hasResponded) return false;
+        
+        if (!mentee.lastEmailSent) return true;
+        
+        const lastSent = new Date(mentee.lastEmailSent);
+        return lastSent < thirtyMinutesAgo;
+      }) || [];
+
+      if (menteesToResend.length === 0) {
+        alert('No mentees need email resend at this time.');
+        setResendingEmails(false);
+        return;
+      }
+
+      // Send emails
+      const emailPromises = menteesToResend.map(async (mentee) => {
+        try {
+          const result = await emailService.sendInvitation({
+            toEmail: mentee.email,
+            inviterName: user.name,
+            inviterEmail: user.email,
+            conflictTitle: conflict.title,
+            conflictId: conflict.id,
+            conflictDescription: conflict.problemStatement?.what
+          });
+          return { email: mentee.email, success: result.success };
+        } catch (error) {
+          console.error(`Failed to resend email to ${mentee.email}:`, error);
+          return { email: mentee.email, success: false };
+        }
+      });
+
+      const results = await Promise.allSettled(emailPromises);
+      
+      // Update mentee records with new send time
+      const updatedMentees = conflict.mentees.map(mentee => {
+        const result = results.find(r => 
+          r.status === 'fulfilled' && r.value.email.toLowerCase() === mentee.email.toLowerCase()
+        );
+        if (result && result.value.success) {
+          return {
+            ...mentee,
+            lastEmailSent: new Date().toISOString(),
+            emailSentCount: (mentee.emailSentCount || 1) + 1
+          };
+        }
+        return mentee;
+      });
+
+      // Save updated conflict
+      const updatedConflict = { ...conflict, mentees: updatedMentees };
+      await storage.set(`conflict:${conflict.id}`, updatedConflict);
+      
+      const successCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+      alert(`Resent ${successCount} of ${menteesToResend.length} invitation emails.`);
+      
+      await onUpdate();
+    } catch (error) {
+      console.error('Error resending emails:', error);
+      alert('Failed to resend emails. Please try again.');
+    }
+    
+    setResendingEmails(false);
+  };
 
   const getNextAction = () => {
     // Handle conflicts created before terms acceptance was added
@@ -2579,6 +2706,16 @@ function ConflictOverview({ conflict, user, onUpdate }) {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <h3 className="text-lg sm:text-xl font-medium text-stone-800">Participants</h3>
           <div className="flex flex-wrap gap-2">
+            {canResendEmails() && (
+              <button
+                onClick={handleResendEmails}
+                disabled={resendingEmails}
+                className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white text-sm rounded-lg font-medium transition-colors"
+              >
+                <Send className="w-4 h-4" />
+                {resendingEmails ? 'Sending...' : 'Resend Invites'}
+              </button>
+            )}
             <button
               onClick={() => {
                 const inviteLink = `${window.location.origin}?invite=${conflict.id}`;
@@ -2605,17 +2742,34 @@ function ConflictOverview({ conflict, user, onUpdate }) {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {conflict.mentees?.map((mentee, idx) => {
-            console.log('Mentee', idx, mentee);
+            // Check if this mentee has responded
+            const hasResponded = conflict.termsAcceptance?.acceptedBy?.includes(mentee.id) ||
+                                conflict.steps?.identifyDefine?.data?.[mentee.id];
+            const isCreator = mentee.id === conflict.createdBy;
+            
             return (
               <div key={idx} className="flex items-center gap-3 p-4 bg-stone-50 rounded-lg">
-                <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 font-medium flex-shrink-0">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-medium flex-shrink-0 ${
+                  isCreator ? 'bg-green-100 text-green-700' :
+                  hasResponded ? 'bg-emerald-100 text-emerald-700' : 
+                  'bg-amber-100 text-amber-700'
+                }`}>
                   {(mentee.email || mentee.name || 'M')[0].toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-stone-800 truncate">
                     {mentee.email || mentee.name || 'Mentee'}
                   </div>
-                  <div className="text-xs text-stone-500 capitalize">Mentee</div>
+                  <div className="text-xs text-stone-500 flex items-center gap-2">
+                    <span className="capitalize">{isCreator ? 'Creator' : 'Mentee'}</span>
+                    {!isCreator && (
+                      <span className={`px-1.5 py-0.5 rounded text-xs ${
+                        hasResponded ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'
+                      }`}>
+                        {hasResponded ? 'Responded' : 'Pending'}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
