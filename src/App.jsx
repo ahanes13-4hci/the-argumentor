@@ -877,22 +877,10 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
   const loadAllUsers = async () => {
     setLoading(true);
     try {
-      const userKeys = await storage.list('user:', true);
-      const users = [];
-      for (const key of userKeys.keys || []) {
-        try {
-          const userData = await storage.get(key, true);
-          if (userData?.value) {
-            const parsedUser = typeof userData.value === 'string' 
-              ? JSON.parse(userData.value) 
-              : userData.value;
-            users.push(parsedUser);
-          }
-        } catch (e) {
-          console.error('Error loading user:', key, e);
-        }
-      }
-      setAllUsers(users);
+      // Users are stored in the all-users array
+      const allUsersList = await storage.get('all-users', true) || [];
+      console.log('Loaded users:', allUsersList);
+      setAllUsers(allUsersList);
     } catch (error) {
       console.error('Error loading users:', error);
     } finally {
