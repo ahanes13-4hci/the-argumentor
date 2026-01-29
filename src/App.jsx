@@ -229,6 +229,50 @@ const storage = {
       console.error('Storage list error:', error);
       return [];
     }
+  },
+  // Migration: Copy conflicts from private to shared storage
+  migrateConflictsToShared: async () => {
+    try {
+      if (!window.storage) {
+        console.log('No window.storage available, skipping migration');
+        return { migrated: 0 };
+      }
+      
+      // Get private conflicts
+      const privateResult = await window.storage.list('conflict:', false);
+      const privateKeys = privateResult?.keys || [];
+      console.log('Found private conflicts:', privateKeys.length);
+      
+      let migrated = 0;
+      for (const key of privateKeys) {
+        try {
+          // Get from private storage
+          const privateData = await window.storage.get(key, false);
+          if (privateData && privateData.value) {
+            const conflict = JSON.parse(privateData.value);
+            
+            // Check if already exists in shared storage
+            const sharedData = await window.storage.get(key, true);
+            if (!sharedData) {
+              // Copy to shared storage
+              await window.storage.set(key, privateData.value, true);
+              console.log(`Migrated ${key} to shared storage`);
+              migrated++;
+            } else {
+              console.log(`${key} already exists in shared storage`);
+            }
+          }
+        } catch (err) {
+          console.error(`Error migrating ${key}:`, err);
+        }
+      }
+      
+      console.log(`Migration complete: ${migrated} conflicts migrated`);
+      return { migrated, total: privateKeys.length };
+    } catch (error) {
+      console.error('Migration error:', error);
+      return { migrated: 0, error };
+    }
   }
 };
 
@@ -269,6 +313,11 @@ export default function TheArgumentor() {
   const loadUserAndConflicts = async () => {
     setLoading(true);
     try {
+      // Run migration to copy private conflicts to shared storage
+      console.log('Running conflict migration...');
+      const migrationResult = await storage.migrateConflictsToShared();
+      console.log('Migration result:', migrationResult);
+      
       const user = await storage.get('current-user');
       if (user) {
         setCurrentUser(user);
