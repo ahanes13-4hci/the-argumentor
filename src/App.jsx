@@ -2062,14 +2062,14 @@ function ConflictCard({ conflict, onClick }) {
           <h3 className="text-lg font-medium text-stone-800 group-hover:text-amber-600 transition-colors mb-2 break-words">
             {conflict.title}
           </h3>
-          <p className="text-stone-600 text-sm line-clamp-2 break-words">{conflict.problemStatement.what}</p>
+          <p className="text-stone-600 text-sm line-clamp-2 break-words">{conflict.problemStatement?.what || 'No description'}</p>
         </div>
         <ChevronRight className="w-5 h-5 text-stone-400 group-hover:text-amber-600 group-hover:translate-x-1 transition-all flex-shrink-0" />
       </div>
 
       <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
         <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[conflict.status] || 'bg-stone-100 text-stone-700'}`}>
-          {conflict.status.replace('-', ' ')}
+          {(conflict.status || 'pending').replace('-', ' ')}
         </span>
         <div className="flex items-center gap-1 text-stone-500 text-sm">
           <Users className="w-4 h-4 flex-shrink-0" />
@@ -2781,7 +2781,7 @@ function ReviewProposedChangesView({ conflict, user, onBack, onUpdate }) {
           {/* Conflict Info */}
           <div className="mb-6 sm:mb-8 p-4 sm:p-6 bg-stone-50 rounded-xl">
             <h3 className="font-medium text-stone-800 mb-2">Conflict: {conflict.title}</h3>
-            <p className="text-stone-600">{conflict.problemStatement.what}</p>
+            <p className="text-stone-600">{conflict.problemStatement?.what || 'No description'}</p>
           </div>
 
           {/* Comparison */}
@@ -3026,7 +3026,7 @@ function TermsAcceptanceView({ conflict, user, onBack, onUpdate }) {
           {/* Conflict Info */}
           <div className="mb-6 sm:mb-8 p-4 sm:p-6 bg-stone-50 rounded-xl">
             <h3 className="font-medium text-stone-800 mb-4">Conflict: {conflict.title}</h3>
-            <p className="text-stone-600 mb-4">{conflict.problemStatement.what}</p>
+            <p className="text-stone-600 mb-4">{conflict.problemStatement?.what || 'No description'}</p>
             <div className="text-sm text-stone-500">
               Created by: {conflict.mentees?.find(m => m.id === conflict.createdBy)?.name || 'Conflict creator'}
             </div>
@@ -3181,10 +3181,10 @@ function ConflictDetailView({ conflict, user, onBack, onUpdate }) {
           {/* Header */}
           <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 sm:p-8 text-white">
             <h1 className="text-xl sm:text-3xl font-light mb-2 break-words">{conflict.title}</h1>
-            <p className="text-amber-100 mb-4 text-sm sm:text-base break-words">{conflict.problemStatement.what}</p>
+            <p className="text-amber-100 mb-4 text-sm sm:text-base break-words">{conflict.problemStatement?.what || 'No description'}</p>
             <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs sm:text-sm">
               <span className="bg-white/20 px-3 py-1 rounded-full backdrop-blur-sm">
-                {conflict.status.replace('-', ' ')}
+                {(conflict.status || 'pending').replace('-', ' ')}
               </span>
               <span>Created {new Date(conflict.createdAt).toLocaleDateString()}</span>
               <span className="capitalize">{conflict.model} model</span>
@@ -3726,7 +3726,7 @@ function ConflictOverview({ conflict, user, onUpdate }) {
         <h3 className="text-lg sm:text-xl font-medium text-stone-800 mb-4">Problem Statement</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
           <InfoCard label="Who" value={conflict.problemStatement.who} />
-          <InfoCard label="What" value={conflict.problemStatement.what} />
+          <InfoCard label="What" value={conflict.problemStatement?.what || 'Not specified'} />
           <InfoCard label="Where" value={conflict.problemStatement.where} />
           <InfoCard label="When" value={conflict.problemStatement.when} />
           <InfoCard label="How" value={conflict.problemStatement.how} colSpan={2} />
@@ -4360,7 +4360,7 @@ function IdentifyDefineStep({ conflict, user, canEdit, onUpdate }) {
             <span className="font-medium text-stone-800">Who:</span> {conflict.problemStatement.who}
           </div>
           <div>
-            <span className="font-medium text-stone-800">What:</span> {conflict.problemStatement.what}
+            <span className="font-medium text-stone-800">What:</span> {conflict.problemStatement?.what || 'Not specified'}
           </div>
           <div>
             <span className="font-medium text-stone-800">Where:</span> {conflict.problemStatement.where}
