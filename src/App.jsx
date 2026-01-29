@@ -474,14 +474,16 @@ export default function TheArgumentor() {
       setCurrentUser(user);
       console.log('currentUser state set');
       
+      // Always load conflicts before showing dashboard
+      console.log('Loading conflicts...');
+      await loadConflicts();
+      console.log('Conflicts loaded');
+      
       // Check if there's a pending invitation
       if (pendingInvite) {
         console.log('Processing pending invite:', pendingInvite);
         // Clear URL params
         clearUrlParams();
-        
-        // Load conflicts first
-        await loadConflicts();
         
         // Try to find and open the invited conflict
         const invitedConflict = await storage.get(`conflict:${pendingInvite.conflictId}`);
@@ -949,6 +951,11 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
   const [filterRole, setFilterRole] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
   const [actionLoading, setActionLoading] = useState(null);
+  // Merge user state
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [mergeSourceUser, setMergeSourceUser] = useState(null);
+  const [mergeTargetUser, setMergeTargetUser] = useState(null);
+  const [duplicateUsers, setDuplicateUsers] = useState([]);
 
   // Load all users and all conflicts from storage
   useEffect(() => {
@@ -1277,6 +1284,278 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
     }
   };
 
+  // Find users with duplicate emails
+  const findDuplicateEmails = () => {
+    const emailMap = {};
+    allUsers.forEach(u => {
+      const email = u.email?.toLowerCase();
+      if (email) {
+        if (!emailMap[email]) {
+          emailMap[email] = [];
+        }
+        emailMap[email].push(u);
+      }
+    });
+    
+    // Return only emails with more than one user
+    const duplicates = Object.entries(emailMap)
+      .filter(([_, users]) => users.length > 1)
+      .map(([email, users]) => ({ email, users }));
+    
+    return duplicates;
+  };
+
+  // Open merge modal for a specific user
+  const openMergeModal = (sourceUser) => {
+    // Find other users with the same email
+    const sameEmailUsers = allUsers.filter(
+      u => u.email?.toLowerCase() === sourceUser.email?.toLowerCase() && u.id !== sourceUser.id
+    );
+    
+    if (sameEmailUsers.length === 0) {
+      alert('No other users found with the same email address.');
+      return;
+    }
+    
+    setMergeSourceUser(sourceUser);
+    setMergeTargetUser(null);
+    setShowMergeModal(true);
+  };
+
+  // Merge users: transfer all records from source to target, then delete source
+  const mergeUsers = async () => {
+    if (!mergeSourceUser || !mergeTargetUser) {
+      alert('Please select both source and target users');
+      return;
+    }
+    
+    if (mergeSourceUser.id === mergeTargetUser.id) {
+      alert('Cannot merge a user with themselves');
+      return;
+    }
+    
+    if (mergeSourceUser.id === user.id) {
+      alert('Cannot merge away your own account. Select yourself as the target user instead.');
+      return;
+    }
+    
+    const confirmMsg = `Are you sure you want to merge "${mergeSourceUser.name}" into "${mergeTargetUser.name}"?\n\n` +
+      `This will:\n` +
+      `• Transfer all conflict participations to "${mergeTargetUser.name}"\n` +
+      `• Delete the account "${mergeSourceUser.name}"\n\n` +
+      `This action cannot be undone.`;
+    
+    if (!confirm(confirmMsg)) {
+      return;
+    }
+    
+    setActionLoading('merge-users');
+    try {
+      console.log('Starting user merge:', { source: mergeSourceUser, target: mergeTargetUser });
+      
+      let conflictsUpdated = 0;
+      
+      // Update all conflicts to replace source user with target user
+      for (const conflict of allConflicts) {
+        let needsUpdate = false;
+        let updatedConflict = { ...conflict };
+        
+        // Check and update mentees
+        if (conflict.mentees && conflict.mentees.length > 0) {
+          const sourceIndex = conflict.mentees.findIndex(m => 
+            m.id === mergeSourceUser.id || 
+            m.email?.toLowerCase() === mergeSourceUser.email?.toLowerCase()
+          );
+          
+          if (sourceIndex !== -1) {
+            // Check if target is already a mentee
+            const targetAlreadyMentee = conflict.mentees.some(m => 
+              m.id === mergeTargetUser.id || 
+              m.email?.toLowerCase() === mergeTargetUser.email?.toLowerCase()
+            );
+            
+            if (targetAlreadyMentee) {
+              // Remove the source user (target already exists)
+              updatedConflict.mentees = conflict.mentees.filter((_, idx) => idx !== sourceIndex);
+            } else {
+              // Replace source with target
+              updatedConflict.mentees = conflict.mentees.map((m, idx) => 
+                idx === sourceIndex 
+                  ? { id: mergeTargetUser.id, name: mergeTargetUser.name, email: mergeTargetUser.email, ...m, id: mergeTargetUser.id }
+                  : m
+              );
+            }
+            needsUpdate = true;
+          }
+        }
+        
+        // Check and update mentor
+        if (conflict.mentor && (
+          conflict.mentor.id === mergeSourceUser.id || 
+          conflict.mentor.email?.toLowerCase() === mergeSourceUser.email?.toLowerCase()
+        )) {
+          updatedConflict.mentor = {
+            ...conflict.mentor,
+            id: mergeTargetUser.id,
+            name: mergeTargetUser.name,
+            email: mergeTargetUser.email
+          };
+          needsUpdate = true;
+        }
+        
+        // Check and update flyOnWall
+        if (conflict.flyOnWall && (
+          conflict.flyOnWall.id === mergeSourceUser.id || 
+          conflict.flyOnWall.email?.toLowerCase() === mergeSourceUser.email?.toLowerCase()
+        )) {
+          updatedConflict.flyOnWall = {
+            ...conflict.flyOnWall,
+            id: mergeTargetUser.id,
+            name: mergeTargetUser.name,
+            email: mergeTargetUser.email
+          };
+          needsUpdate = true;
+        }
+        
+        // Check and update omniscient
+        if (conflict.omniscient && (
+          conflict.omniscient.id === mergeSourceUser.id || 
+          conflict.omniscient.email?.toLowerCase() === mergeSourceUser.email?.toLowerCase()
+        )) {
+          updatedConflict.omniscient = {
+            ...conflict.omniscient,
+            id: mergeTargetUser.id,
+            name: mergeTargetUser.name,
+            email: mergeTargetUser.email
+          };
+          needsUpdate = true;
+        }
+        
+        // Check and update createdBy
+        if (conflict.createdBy === mergeSourceUser.id) {
+          updatedConflict.createdBy = mergeTargetUser.id;
+          needsUpdate = true;
+        }
+        
+        // Check and update updatedBy
+        if (conflict.updatedBy === mergeSourceUser.id) {
+          updatedConflict.updatedBy = mergeTargetUser.id;
+          needsUpdate = true;
+        }
+        
+        // Check and update termsAcceptance
+        if (conflict.termsAcceptance?.acceptedBy?.includes(mergeSourceUser.id)) {
+          updatedConflict.termsAcceptance = {
+            ...conflict.termsAcceptance,
+            acceptedBy: conflict.termsAcceptance.acceptedBy
+              .filter(id => id !== mergeSourceUser.id)
+              .concat(conflict.termsAcceptance.acceptedBy.includes(mergeTargetUser.id) ? [] : [mergeTargetUser.id])
+          };
+          needsUpdate = true;
+        }
+        
+        // Check and update alternatives in steps
+        if (conflict.steps?.exploreAlternatives?.alternatives) {
+          const hasSourceAlternatives = conflict.steps.exploreAlternatives.alternatives.some(
+            alt => alt.createdBy === mergeSourceUser.id || alt.createdByEmail?.toLowerCase() === mergeSourceUser.email?.toLowerCase()
+          );
+          if (hasSourceAlternatives) {
+            updatedConflict.steps = {
+              ...conflict.steps,
+              exploreAlternatives: {
+                ...conflict.steps.exploreAlternatives,
+                alternatives: conflict.steps.exploreAlternatives.alternatives.map(alt => {
+                  if (alt.createdBy === mergeSourceUser.id || alt.createdByEmail?.toLowerCase() === mergeSourceUser.email?.toLowerCase()) {
+                    return {
+                      ...alt,
+                      createdBy: mergeTargetUser.id,
+                      createdByName: mergeTargetUser.name,
+                      createdByEmail: mergeTargetUser.email
+                    };
+                  }
+                  return alt;
+                })
+              }
+            };
+            needsUpdate = true;
+          }
+        }
+        
+        // Check and update comments
+        if (conflict.comments && conflict.comments.length > 0) {
+          const hasSourceComments = conflict.comments.some(
+            c => c.authorId === mergeSourceUser.id || c.authorEmail?.toLowerCase() === mergeSourceUser.email?.toLowerCase()
+          );
+          if (hasSourceComments) {
+            updatedConflict.comments = conflict.comments.map(c => {
+              if (c.authorId === mergeSourceUser.id || c.authorEmail?.toLowerCase() === mergeSourceUser.email?.toLowerCase()) {
+                return {
+                  ...c,
+                  authorId: mergeTargetUser.id,
+                  author: mergeTargetUser.name,
+                  authorEmail: mergeTargetUser.email
+                };
+              }
+              return c;
+            });
+            needsUpdate = true;
+          }
+        }
+        
+        // Save updated conflict if changes were made
+        if (needsUpdate) {
+          updatedConflict.updatedAt = new Date().toISOString();
+          updatedConflict.mergeNote = `User ${mergeSourceUser.email} merged into ${mergeTargetUser.email} on ${new Date().toISOString()}`;
+          await storage.set(`conflict:${conflict.id}`, updatedConflict, true);
+          conflictsUpdated++;
+          console.log(`Updated conflict: ${conflict.title}`);
+        }
+      }
+      
+      // Remove source user from all-users list
+      const updatedAllUsers = allUsers.filter(u => u.id !== mergeSourceUser.id);
+      await storage.set('all-users', updatedAllUsers, true);
+      
+      // Update local state
+      setAllUsers(updatedAllUsers);
+      
+      // Close modal
+      setShowMergeModal(false);
+      setMergeSourceUser(null);
+      setMergeTargetUser(null);
+      
+      // Reload data to reflect changes
+      await reloadData();
+      
+      alert(`Merge complete!\n\n` +
+        `• "${mergeSourceUser.name}" has been merged into "${mergeTargetUser.name}"\n` +
+        `• ${conflictsUpdated} conflict(s) were updated\n` +
+        `• The duplicate account has been removed`);
+      
+    } catch (error) {
+      console.error('Error merging users:', error);
+      alert('Failed to merge users. Check console for details.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Get users with same email as a given user
+  const getSameEmailUsers = (targetUser) => {
+    return allUsers.filter(
+      u => u.email?.toLowerCase() === targetUser.email?.toLowerCase() && u.id !== targetUser.id
+    );
+  };
+
+  // Check for duplicate emails on load
+  useEffect(() => {
+    const duplicates = findDuplicateEmails();
+    setDuplicateUsers(duplicates);
+    if (duplicates.length > 0) {
+      console.log('Found duplicate email users:', duplicates);
+    }
+  }, [allUsers]);
+
   // Filter users
   const filteredUsers = allUsers.filter(u => {
     const matchesSearch = !searchTerm || 
@@ -1367,7 +1646,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
 
       <div className="max-w-7xl mx-auto px-3 sm:px-6 py-6">
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
           <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200">
             <div className="flex items-center gap-2 text-stone-600 mb-1">
               <Users className="w-4 h-4" />
@@ -1409,7 +1688,54 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
             </div>
             <div className="text-2xl font-bold text-blue-600">{allConflicts.length}</div>
           </div>
+          <div className={`rounded-xl p-4 shadow-sm border ${duplicateUsers.length > 0 ? 'bg-orange-50 border-orange-200' : 'bg-white border-stone-200'}`}>
+            <div className={`flex items-center gap-2 mb-1 ${duplicateUsers.length > 0 ? 'text-orange-600' : 'text-stone-400'}`}>
+              <Users className="w-4 h-4" />
+              <span className="text-xs font-medium">Duplicates</span>
+            </div>
+            <div className={`text-2xl font-bold ${duplicateUsers.length > 0 ? 'text-orange-600' : 'text-stone-400'}`}>
+              {duplicateUsers.length}
+            </div>
+          </div>
         </div>
+
+        {/* Duplicate Users Warning */}
+        {duplicateUsers.length > 0 && (
+          <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-orange-800 mb-1">Duplicate Email Addresses Detected</h3>
+                <p className="text-sm text-orange-700 mb-3">
+                  The following email addresses have multiple user accounts. Consider merging them to consolidate conflict history.
+                </p>
+                <div className="space-y-2">
+                  {duplicateUsers.map(({ email, users }) => (
+                    <div key={email} className="bg-white rounded-lg p-3 border border-orange-200">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div>
+                          <span className="font-medium text-stone-800">{email}</span>
+                          <span className="text-sm text-stone-500 ml-2">({users.length} accounts)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs text-stone-500">
+                            {users.map(u => u.name).join(', ')}
+                          </div>
+                          <button
+                            onClick={() => openMergeModal(users[0])}
+                            className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs rounded-lg font-medium transition-colors"
+                          >
+                            Merge Users
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Filters */}
         <div className="bg-white rounded-xl p-4 shadow-sm border border-stone-200 mb-6">
@@ -1523,6 +1849,18 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
                             <CheckCircle className="w-4 h-4" />
                           )}
                         </button>
+                        
+                        {/* Merge Users - show if duplicate emails exist */}
+                        {getSameEmailUsers(targetUser).length > 0 && (
+                          <button
+                            onClick={() => openMergeModal(targetUser)}
+                            disabled={actionLoading === 'merge-users'}
+                            className="p-2 rounded-lg transition-colors hover:bg-orange-50 text-orange-600"
+                            title={`Merge with ${getSameEmailUsers(targetUser).length} duplicate account(s)`}
+                          >
+                            <Users className="w-4 h-4" />
+                          </button>
+                        )}
                         
                         {/* Expand/Collapse */}
                         <button
@@ -1872,6 +2210,138 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
           </div>
         </div>
       )}
+
+      {/* Merge Users Modal */}
+      {showMergeModal && mergeSourceUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-hidden">
+            <div className="p-4 border-b border-stone-200 bg-orange-50">
+              <h3 className="font-semibold text-stone-800 flex items-center gap-2">
+                <Users className="w-5 h-5 text-orange-600" />
+                Merge User Accounts
+              </h3>
+              <p className="text-sm text-stone-600 mt-1">
+                Combine duplicate accounts with the same email address
+              </p>
+            </div>
+            
+            <div className="p-4 space-y-4 max-h-[60vh] overflow-y-auto">
+              {/* Source User (to be merged/deleted) */}
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-2">
+                  Source Account (will be deleted)
+                </label>
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-red-500 flex items-center justify-center text-white font-medium">
+                      {mergeSourceUser.name?.charAt(0)?.toUpperCase() || '?'}
+                    </div>
+                    <div>
+                      <div className="font-medium text-stone-800">{mergeSourceUser.name}</div>
+                      <div className="text-sm text-stone-500">{mergeSourceUser.email}</div>
+                      <div className="text-xs text-stone-400">ID: {mergeSourceUser.id}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-red-600">
+                    This account will be removed after merge
+                  </div>
+                </div>
+              </div>
+              
+              {/* Arrow */}
+              <div className="flex justify-center">
+                <ChevronDown className="w-6 h-6 text-stone-400" />
+              </div>
+              
+              {/* Target User (to keep) */}
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-2">
+                  Target Account (will be kept)
+                </label>
+                <div className="space-y-2">
+                  {getSameEmailUsers(mergeSourceUser).map(targetOption => {
+                    const isSelected = mergeTargetUser?.id === targetOption.id;
+                    const targetConflicts = getUserConflicts(targetOption.id);
+                    
+                    return (
+                      <button
+                        key={targetOption.id}
+                        onClick={() => setMergeTargetUser(targetOption)}
+                        className={`w-full text-left p-3 rounded-lg border-2 transition-all ${
+                          isSelected 
+                            ? 'border-green-500 bg-green-50' 
+                            : 'border-stone-200 hover:border-stone-300 hover:bg-stone-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-medium ${
+                            isSelected ? 'bg-green-500' : 'bg-stone-400'
+                          }`}>
+                            {targetOption.name?.charAt(0)?.toUpperCase() || '?'}
+                          </div>
+                          <div className="flex-1">
+                            <div className="font-medium text-stone-800">{targetOption.name}</div>
+                            <div className="text-sm text-stone-500">{targetOption.email}</div>
+                            <div className="text-xs text-stone-400">
+                              Role: {targetOption.role} • {targetConflicts.length} conflict(s) • ID: {targetOption.id}
+                            </div>
+                          </div>
+                          {isSelected && (
+                            <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              
+              {/* Preview of what will happen */}
+              {mergeTargetUser && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <h4 className="font-medium text-blue-800 mb-2 text-sm">What will happen:</h4>
+                  <ul className="text-sm text-blue-700 space-y-1">
+                    <li>• All conflicts from "{mergeSourceUser.name}" will be transferred to "{mergeTargetUser.name}"</li>
+                    <li>• Comments, alternatives, and other contributions will be reassigned</li>
+                    <li>• The account "{mergeSourceUser.name}" will be permanently deleted</li>
+                    <li>• "{mergeTargetUser.name}" will retain their login credentials</li>
+                  </ul>
+                </div>
+              )}
+            </div>
+            
+            <div className="p-4 border-t border-stone-200 flex justify-end gap-3 bg-stone-50">
+              <button
+                onClick={() => {
+                  setShowMergeModal(false);
+                  setMergeSourceUser(null);
+                  setMergeTargetUser(null);
+                }}
+                className="px-4 py-2 text-stone-600 hover:bg-stone-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={mergeUsers}
+                disabled={!mergeTargetUser || actionLoading === 'merge-users'}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-stone-300 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                {actionLoading === 'merge-users' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Merging...
+                  </>
+                ) : (
+                  <>
+                    <Users className="w-4 h-4" />
+                    Merge Accounts
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1879,15 +2349,24 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
 // Dashboard View Component
 function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateConflict, onRefresh, onUserManagement }) {
   const [filter, setFilter] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Reload conflicts when dashboard mounts
+  // Reload conflicts when dashboard mounts or when conflicts array is empty
   useEffect(() => {
-    console.log('Dashboard mounted, conflicts:', conflicts);
-    if (conflicts.length === 0) {
-      console.log('No conflicts found, triggering refresh...');
-      onRefresh();
-    }
-  }, []);
+    console.log('Dashboard effect triggered, conflicts count:', conflicts.length);
+    const refreshConflicts = async () => {
+      if (conflicts.length === 0 && !isRefreshing) {
+        console.log('No conflicts found, triggering refresh...');
+        setIsRefreshing(true);
+        try {
+          await onRefresh();
+        } finally {
+          setIsRefreshing(false);
+        }
+      }
+    };
+    refreshConflicts();
+  }, [conflicts.length]);
 
   const userConflicts = conflicts.filter(c => {
     // Check if user is a participant by ID
@@ -1897,13 +2376,29 @@ function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateCo
                                c.omniscient?.id === user.id;
     
     // Check if user is an invited mentee by email
-    const isInvitedByEmail = c.mentees?.some(m => m.email.toLowerCase() === user.email.toLowerCase());
+    const isInvitedByEmail = c.mentees?.some(m => m.email?.toLowerCase() === user.email?.toLowerCase());
     
     // Check if user created the conflict
     const isCreator = c.createdBy === user.id;
     
     // Admin sees everything
     const isAdmin = user.role === 'admin';
+    
+    // Debug logging for troubleshooting
+    console.log(`Filter check for conflict "${c.title}":`, {
+      conflictId: c.id,
+      userEmail: user.email,
+      userId: user.id,
+      userRole: user.role,
+      menteeEmails: c.mentees?.map(m => m.email),
+      menteeIds: c.mentees?.map(m => m.id),
+      createdBy: c.createdBy,
+      isParticipantById,
+      isInvitedByEmail,
+      isCreator,
+      isAdmin,
+      willInclude: isAdmin || isParticipantById || isInvitedByEmail || isCreator
+    });
     
     if (isAdmin) return true;
     return isParticipantById || isInvitedByEmail || isCreator;
