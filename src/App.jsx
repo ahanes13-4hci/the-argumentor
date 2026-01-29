@@ -919,6 +919,7 @@ function LoginView({ onLogin, pendingInvite }) {
 // User Management View Component (Admin Only)
 function UserManagementView({ user, conflicts, onBack, onRefresh }) {
   const [allUsers, setAllUsers] = useState([]);
+  const [allConflicts, setAllConflicts] = useState([]); // All conflicts for admin assignment
   const [loading, setLoading] = useState(true);
   const [selectedUser, setSelectedUser] = useState(null);
   const [showReassignModal, setShowReassignModal] = useState(false);
@@ -932,28 +933,51 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
   const [filterStatus, setFilterStatus] = useState('all');
   const [actionLoading, setActionLoading] = useState(null);
 
-  // Load all users from storage
+  // Load all users and all conflicts from storage
   useEffect(() => {
-    loadAllUsers();
+    loadAllData();
   }, []);
 
-  const loadAllUsers = async () => {
+  const loadAllData = async () => {
     setLoading(true);
     try {
-      // Users are stored in the all-users array
+      // Load all users
       const allUsersList = await storage.get('all-users', true) || [];
       console.log('Loaded users:', allUsersList);
       setAllUsers(allUsersList);
+      
+      // Load ALL conflicts from shared storage (admin sees everything)
+      const conflictKeys = await storage.list('conflict:', true);
+      console.log('Found conflict keys:', conflictKeys);
+      const loadedConflicts = [];
+      for (const key of conflictKeys) {
+        try {
+          const conflict = await storage.get(key, true);
+          if (conflict) {
+            loadedConflicts.push(conflict);
+          }
+        } catch (e) {
+          console.error('Error loading conflict:', key, e);
+        }
+      }
+      console.log('Loaded all conflicts for admin:', loadedConflicts);
+      setAllConflicts(loadedConflicts);
     } catch (error) {
-      console.error('Error loading users:', error);
+      console.error('Error loading data:', error);
     } finally {
       setLoading(false);
     }
   };
 
+  // Reload function for after changes
+  const reloadData = async () => {
+    await loadAllData();
+    if (onRefresh) onRefresh();
+  };
+
   // Get conflicts for a specific user
   const getUserConflicts = (userId) => {
-    return conflicts.filter(c => {
+    return allConflicts.filter(c => {
       const isMentee = c.mentees?.some(m => m.id === userId);
       const isFlyOnWall = c.flyOnWall?.id === userId;
       const isOmniscient = c.omniscient?.id === userId;
@@ -1119,7 +1143,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
   const addUserToConflict = async (conflictId, roleInConflict) => {
     if (!addToConflictUser) return;
     
-    const conflict = conflicts.find(c => c.id === conflictId);
+    const conflict = allConflicts.find(c => c.id === conflictId);
     if (!conflict) {
       alert('Conflict not found');
       return;
@@ -1158,7 +1182,8 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
       setShowAddToConflictModal(false);
       setAddToConflictUser(null);
       
-      if (onRefresh) onRefresh();
+      // Reload all data to reflect changes
+      await reloadData();
     } catch (error) {
       console.error('Error adding user to conflict:', error);
       alert('Failed to add user to conflict');
@@ -1267,7 +1292,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
               <span className="hidden sm:inline">Create User</span>
             </button>
             <button
-              onClick={loadAllUsers}
+              onClick={reloadData}
               className="p-2 hover:bg-stone-100 rounded-lg transition-colors"
               title="Refresh"
             >
@@ -1612,11 +1637,14 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
               </p>
             </div>
             <div className="p-4 max-h-96 overflow-y-auto">
-              {conflicts.length === 0 ? (
-                <p className="text-stone-500 text-center py-4">No conflicts available</p>
+              {allConflicts.filter(c => c.status !== 'resolved').length === 0 ? (
+                <p className="text-stone-500 text-center py-4">No open conflicts available</p>
               ) : (
                 <div className="space-y-3">
-                  {conflicts.map(conflict => {
+                  {allConflicts
+                    .filter(c => c.status !== 'resolved')
+                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                    .map(conflict => {
                     const isAlreadyMentee = conflict.mentees?.some(m => m.id === addToConflictUser.id);
                     const isAlreadyFlyOnWall = conflict.flyOnWall?.id === addToConflictUser.id;
                     const isAlreadyOmniscient = conflict.omniscient?.id === addToConflictUser.id;
