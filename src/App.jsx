@@ -1,6 +1,61 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Clock, Users, CheckCircle, AlertCircle, MessageSquare, BarChart3, FileText, Plus, Send, ThumbsUp, ThumbsDown, User, Settings, LogOut, ChevronRight, ChevronDown, ChevronUp, X, Mic, MicOff, Mail, Search, RefreshCw, Trash2, XCircle, ArrowLeft, Loader2 } from 'lucide-react';
 
+// Firebase Configuration
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDUMQlhN_x8MXQL3FF0B73LEQM_EVVj5RA",
+  authDomain: "argumentor-ff17a.firebaseapp.com",
+  databaseURL: "https://argumentor-ff17a-default-rtdb.firebaseio.com",
+  projectId: "argumentor-ff17a",
+  storageBucket: "argumentor-ff17a.firebasestorage.app",
+  messagingSenderId: "347151341699",
+  appId: "1:347151341699:web:a1b2c3d4e5f6g7h8i9j0" // You may need to update this from Firebase console
+};
+
+// Firebase initialization
+let firebaseApp = null;
+let firebaseDb = null;
+let firebaseInitialized = false;
+let firebaseInitPromise = null;
+
+const initFirebase = async () => {
+  if (firebaseInitialized) return true;
+  if (firebaseInitPromise) return firebaseInitPromise;
+  
+  firebaseInitPromise = (async () => {
+    try {
+      // Dynamically import Firebase
+      const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js');
+      const { getDatabase, ref, get, set, remove, query, orderByKey, startAt, endAt } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js');
+      
+      // Initialize Firebase
+      firebaseApp = initializeApp(FIREBASE_CONFIG);
+      firebaseDb = getDatabase(firebaseApp);
+      
+      // Store the database functions globally for use in storage
+      window.firebaseDb = firebaseDb;
+      window.firebaseRef = ref;
+      window.firebaseGet = get;
+      window.firebaseSet = set;
+      window.firebaseRemove = remove;
+      window.firebaseQuery = query;
+      window.firebaseOrderByKey = orderByKey;
+      window.firebaseStartAt = startAt;
+      window.firebaseEndAt = endAt;
+      
+      firebaseInitialized = true;
+      console.log('Firebase initialized successfully');
+      return true;
+    } catch (error) {
+      console.error('Firebase initialization error:', error);
+      firebaseInitPromise = null;
+      return false;
+    }
+  })();
+  
+  return firebaseInitPromise;
+};
+
 // Email Service Configuration
 // To enable email notifications:
 // 1. Sign up at https://www.emailjs.com/ (free tier: 200 emails/month)
@@ -167,48 +222,65 @@ const VoiceInputButton = ({ onResult, className = '' }) => {
 };
 
 // Utility function for persistent storage
-// Conflicts use shared=true so all participants can see them
-// User data uses shared=false for privacy
+// Uses Firebase Realtime Database for shared data across all users/devices
+// Falls back to window.storage (Claude) or localStorage
 const storage = {
+  // Convert key to Firebase-safe format
+  toFirebaseKey: (key) => key.replace(/[.#$[\]:]/g, '_'),
+  // Convert Firebase key back to original format
+  fromFirebaseKey: (key) => key.replace(/conflict_/g, 'conflict:'),
+  
   get: async (key, shared = null) => {
     try {
-      // Determine if this should be shared
-      // conflicts and all-users are shared so users can collaborate
-      const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
+      // Sanitize key for Firebase (replace invalid characters)
+      const firebaseKey = storage.toFirebaseKey(key);
       
-      // Try window.storage first
+      // Try Firebase first
+      await initFirebase();
+      if (window.firebaseDb && window.firebaseRef && window.firebaseGet) {
+        try {
+          const dbRef = window.firebaseRef(window.firebaseDb, `data/${firebaseKey}`);
+          const snapshot = await window.firebaseGet(dbRef);
+          if (snapshot.exists()) {
+            const value = snapshot.val();
+            console.log(`Firebase get ${key}:`, value ? 'found' : 'null');
+            return value;
+          }
+          console.log(`Firebase get ${key}: not found`);
+          return null;
+        } catch (fbError) {
+          console.error('Firebase get error:', fbError);
+          // Fall through to other methods
+        }
+      }
+      
+      // Try window.storage (Claude artifact environment)
       if (window.storage && window.storage.get) {
+        const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
         const result = await window.storage.get(key, isShared);
         if (!result) return null;
         
         let parsed = JSON.parse(result.value);
         
         // Handle double-stringified legacy data
-        // If after parsing we still have a string that looks like JSON, parse again
         if (typeof parsed === 'string' && (parsed.startsWith('{') || parsed.startsWith('['))) {
           try {
             parsed = JSON.parse(parsed);
-            console.log(`Fixed double-stringified data for key: ${key}`);
-          } catch (e) {
-            // Not double-stringified, use as-is
-          }
+          } catch (e) {}
         }
         
         return parsed;
       }
+      
       // Fallback to localStorage
       const item = localStorage.getItem(key);
       if (!item) return null;
       
       let parsed = JSON.parse(item);
-      
-      // Handle double-stringified legacy data
       if (typeof parsed === 'string' && (parsed.startsWith('{') || parsed.startsWith('['))) {
         try {
           parsed = JSON.parse(parsed);
-        } catch (e) {
-          // Not double-stringified, use as-is
-        }
+        } catch (e) {}
       }
       
       return parsed;
@@ -217,17 +289,33 @@ const storage = {
       return null;
     }
   },
+  
   set: async (key, value, shared = null) => {
     try {
-      // Determine if this should be shared
-      // conflicts and all-users are shared so users can collaborate
-      const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
+      // Sanitize key for Firebase
+      const firebaseKey = storage.toFirebaseKey(key);
       
-      // Try window.storage first
+      // Try Firebase first
+      await initFirebase();
+      if (window.firebaseDb && window.firebaseRef && window.firebaseSet) {
+        try {
+          const dbRef = window.firebaseRef(window.firebaseDb, `data/${firebaseKey}`);
+          await window.firebaseSet(dbRef, value);
+          console.log(`Firebase set ${key}: success`);
+          return true;
+        } catch (fbError) {
+          console.error('Firebase set error:', fbError);
+          // Fall through to other methods
+        }
+      }
+      
+      // Try window.storage (Claude artifact environment)
       if (window.storage && window.storage.set) {
+        const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
         await window.storage.set(key, JSON.stringify(value), isShared);
         return true;
       }
+      
       // Fallback to localStorage
       localStorage.setItem(key, JSON.stringify(value));
       return true;
@@ -236,21 +324,42 @@ const storage = {
       return false;
     }
   },
+  
   list: async (prefix, shared = null) => {
     try {
-      // Determine if this should be shared
-      // conflicts and all-users are shared so users can collaborate
-      const isShared = shared !== null ? shared : (prefix.startsWith('conflict:') || prefix === 'all-users');
+      // Sanitize prefix for Firebase
+      const firebasePrefix = storage.toFirebaseKey(prefix);
       
-      // Try window.storage first
-      if (window.storage && window.storage.list) {
-        const result = await window.storage.list(prefix, isShared);
-        // Handle both array and object with keys property
-        if (Array.isArray(result)) {
-          return result;
+      // Try Firebase first
+      await initFirebase();
+      if (window.firebaseDb && window.firebaseRef && window.firebaseGet) {
+        try {
+          const dbRef = window.firebaseRef(window.firebaseDb, 'data');
+          const snapshot = await window.firebaseGet(dbRef);
+          if (snapshot.exists()) {
+            const allData = snapshot.val();
+            const keys = Object.keys(allData)
+              .filter(k => k.startsWith(firebasePrefix))
+              .map(k => storage.fromFirebaseKey(k)); // Convert back to original format
+            console.log(`Firebase list ${prefix}:`, keys.length, 'keys');
+            return keys;
+          }
+          console.log(`Firebase list ${prefix}: no data`);
+          return [];
+        } catch (fbError) {
+          console.error('Firebase list error:', fbError);
+          // Fall through to other methods
         }
+      }
+      
+      // Try window.storage (Claude artifact environment)
+      if (window.storage && window.storage.list) {
+        const isShared = shared !== null ? shared : (prefix.startsWith('conflict:') || prefix === 'all-users');
+        const result = await window.storage.list(prefix, isShared);
+        if (Array.isArray(result)) return result;
         return result?.keys || [];
       }
+      
       // Fallback to localStorage
       const keys = [];
       for (let i = 0; i < localStorage.length; i++) {
@@ -265,16 +374,33 @@ const storage = {
       return [];
     }
   },
+  
   delete: async (key, shared = null) => {
     try {
-      // Determine if this should be shared
-      const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
+      // Sanitize key for Firebase
+      const firebaseKey = storage.toFirebaseKey(key);
       
-      // Try window.storage first
+      // Try Firebase first
+      await initFirebase();
+      if (window.firebaseDb && window.firebaseRef && window.firebaseRemove) {
+        try {
+          const dbRef = window.firebaseRef(window.firebaseDb, `data/${firebaseKey}`);
+          await window.firebaseRemove(dbRef);
+          console.log(`Firebase delete ${key}: success`);
+          return true;
+        } catch (fbError) {
+          console.error('Firebase delete error:', fbError);
+          // Fall through to other methods
+        }
+      }
+      
+      // Try window.storage (Claude artifact environment)
       if (window.storage && window.storage.delete) {
+        const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
         await window.storage.delete(key, isShared);
         return true;
       }
+      
       // Fallback to localStorage
       localStorage.removeItem(key);
       return true;
@@ -283,115 +409,47 @@ const storage = {
       return false;
     }
   },
-  // Migration: Copy conflicts from private to shared storage
-  migrateConflictsToShared: async () => {
-    try {
-      if (!window.storage) {
-        console.log('No window.storage available, skipping migration');
-        return { migrated: 0 };
-      }
-      
-      // Get private conflicts
-      const privateResult = await window.storage.list('conflict:', false);
-      console.log('Private result raw:', privateResult);
-      
-      // Handle different response formats
-      let privateKeys = [];
-      if (Array.isArray(privateResult)) {
-        privateKeys = privateResult;
-      } else if (privateResult?.keys) {
-        privateKeys = privateResult.keys;
-      }
-      console.log('Found private conflicts:', privateKeys.length);
-      
-      let migrated = 0;
-      for (const key of privateKeys) {
-        try {
-          // Get from private storage
-          const privateData = await window.storage.get(key, false);
-          if (privateData && privateData.value) {
-            // Check if already exists in shared storage
-            let existsInShared = false;
-            try {
-              const sharedData = await window.storage.get(key, true);
-              existsInShared = !!sharedData;
-            } catch (e) {
-              // Key doesn't exist in shared
-            }
-            
-            if (!existsInShared) {
-              // Copy to shared storage
-              await window.storage.set(key, privateData.value, true);
-              console.log(`Migrated ${key} to shared storage`);
-              migrated++;
-            } else {
-              console.log(`${key} already exists in shared storage`);
-            }
-          }
-        } catch (err) {
-          console.error(`Error migrating ${key}:`, err);
-        }
-      }
-      
-      console.log(`Migration complete: ${migrated} conflicts migrated`);
-      return { migrated, total: privateKeys.length };
-    } catch (error) {
-      console.error('Migration error:', error);
-      return { migrated: 0, error };
+  
+  // Check which storage backend is active
+  getBackendInfo: async () => {
+    await initFirebase();
+    if (window.firebaseDb) {
+      return { backend: 'firebase', available: true };
     }
+    if (window.storage) {
+      return { backend: 'claude', available: true };
+    }
+    return { backend: 'localStorage', available: true };
   },
-  // Migration: Copy users from private to shared storage
-  migrateUsersToShared: async () => {
-    try {
-      if (!window.storage) {
-        console.log('No window.storage available, skipping user migration');
-        return { migrated: 0 };
-      }
-      
-      // Check if there are users in private storage
-      const privateUsers = await window.storage.get('all-users', false);
-      if (!privateUsers || !privateUsers.value) {
-        console.log('No private users to migrate');
-        return { migrated: 0 };
-      }
-      
-      const privateUserList = JSON.parse(privateUsers.value);
-      if (!privateUserList || privateUserList.length === 0) {
-        console.log('Private user list is empty');
-        return { migrated: 0 };
-      }
-      
-      // Get existing shared users
-      let sharedUsers = [];
-      try {
-        const sharedResult = await window.storage.get('all-users', true);
-        if (sharedResult && sharedResult.value) {
-          sharedUsers = JSON.parse(sharedResult.value);
-        }
-      } catch (e) {
-        console.log('No existing shared users');
-      }
-      
-      // Merge: add private users that don't exist in shared
-      let merged = 0;
-      for (const privateUser of privateUserList) {
-        const existsInShared = sharedUsers.some(su => su.email?.toLowerCase() === privateUser.email?.toLowerCase());
-        if (!existsInShared) {
-          sharedUsers.push(privateUser);
-          merged++;
-        }
-      }
-      
-      if (merged > 0) {
-        await window.storage.set('all-users', JSON.stringify(sharedUsers), true);
-        console.log(`User migration complete: ${merged} users migrated to shared storage`);
-      }
-      
-      return { migrated: merged, total: privateUserList.length };
-    } catch (error) {
-      console.error('User migration error:', error);
-      return { migrated: 0, error };
+  
+  // Migration: Copy data from localStorage/Claude to Firebase
+  migrateToFirebase: async () => {
+    await initFirebase();
+    if (!window.firebaseDb) {
+      console.log('Firebase not available for migration');
+      return { migrated: 0 };
     }
+    
+    let migrated = 0;
+    
+    // Try to migrate from localStorage
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('conflict:') || key === 'all-users')) {
+        try {
+          const value = JSON.parse(localStorage.getItem(key));
+          const firebaseKey = storage.toFirebaseKey(key);
+          const dbRef = window.firebaseRef(window.firebaseDb, `data/${firebaseKey}`);
+          await window.firebaseSet(dbRef, value);
+          migrated++;
+          console.log(`Migrated ${key} to Firebase`);
+        } catch (e) {
+          console.error(`Failed to migrate ${key}:`, e);
+        }
+      }
+    }
+    
+    return { migrated };
   }
 };
 
@@ -1887,6 +1945,31 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
             </button>
             <button
               onClick={async () => {
+                setActionLoading('migrate-firebase');
+                try {
+                  const result = await storage.migrateToFirebase();
+                  await reloadData();
+                  alert(`Migration to Firebase complete!\n\n${result.migrated} item(s) migrated.`);
+                } catch (error) {
+                  console.error('Firebase migration error:', error);
+                  alert('Firebase migration failed. Check console for details.');
+                } finally {
+                  setActionLoading(null);
+                }
+              }}
+              disabled={actionLoading === 'migrate-firebase'}
+              className="flex items-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+              title="Migrate local data to Firebase"
+            >
+              {actionLoading === 'migrate-firebase' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              <span className="hidden sm:inline">Migrate to Firebase</span>
+            </button>
+            <button
+              onClick={async () => {
                 setActionLoading('sync');
                 try {
                   // Run migrations
@@ -2877,20 +2960,17 @@ function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateCo
   useEffect(() => {
     const fetchDebugInfo = async () => {
       try {
-        const hasWindowStorage = !!(window.storage && window.storage.list);
-        let keys = [];
-        let rawListResult = null;
+        // Get backend info
+        const backendInfo = await storage.getBackendInfo();
         
-        if (hasWindowStorage) {
-          rawListResult = await window.storage.list('conflict:', true);
-          keys = Array.isArray(rawListResult) ? rawListResult : (rawListResult?.keys || []);
-        }
+        // Try to list conflicts
+        const keys = await storage.list('conflict:', true);
         
         setDebugInfo({
-          hasWindowStorage,
-          rawListResult: JSON.stringify(rawListResult),
-          keyCount: keys.length,
-          keys: keys.slice(0, 5) // First 5 keys
+          backend: backendInfo.backend,
+          backendAvailable: backendInfo.available,
+          keyCount: keys?.length || 0,
+          keys: keys?.slice(0, 5) || []
         });
       } catch (error) {
         setDebugInfo({ error: error.message });
@@ -3115,9 +3195,9 @@ function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateCo
                 {debugInfo && (
                   <div className="mt-2 pt-2 border-t border-yellow-300">
                     <p className="font-bold text-yellow-800">Storage Debug:</p>
-                    <p className="text-yellow-700">window.storage exists: {debugInfo.hasWindowStorage ? '✅ YES' : '❌ NO'}</p>
+                    <p className="text-yellow-700">Backend: {debugInfo.backend || 'unknown'}</p>
+                    <p className="text-yellow-700">Backend available: {debugInfo.backendAvailable ? '✅ YES' : '❌ NO'}</p>
                     <p className="text-yellow-700">Keys found: {debugInfo.keyCount ?? 'error'}</p>
-                    <p className="text-yellow-700 break-all">Raw list result: {debugInfo.rawListResult || 'null'}</p>
                     {debugInfo.keys && debugInfo.keys.length > 0 && (
                       <p className="text-yellow-700">First keys: {debugInfo.keys.join(', ')}</p>
                     )}
