@@ -3893,6 +3893,93 @@ function ConflictOverview({ conflict, user, onUpdate }) {
   const [newParticipantEmail, setNewParticipantEmail] = useState('');
   const [addingParticipant, setAddingParticipant] = useState(false);
   const [resendingEmails, setResendingEmails] = useState(false);
+  const [removingMentee, setRemovingMentee] = useState(null);
+
+  // Check if user can remove a specific mentee
+  // - Mentor can remove any mentee at any stage
+  // - Creator/Admin can only remove mentees who have NOT yet accepted
+  const canRemoveMentee = (mentee) => {
+    const isCreator = conflict.createdBy === user.id;
+    const isMentor = conflict.mentor?.id === user.id;
+    const isAdmin = user.role === 'admin';
+    const isMenteeCreator = mentee.id === conflict.createdBy;
+    
+    // Can never remove the conflict creator
+    if (isMenteeCreator) return false;
+    
+    // Mentor can always remove any mentee
+    if (isMentor) return true;
+    
+    // Check if this specific mentee has accepted
+    const menteeHasAccepted = conflict.termsAcceptance?.acceptedBy?.includes(mentee.id);
+    
+    // Creator and Admin can only remove if mentee hasn't accepted yet
+    if ((isCreator || isAdmin) && !menteeHasAccepted) {
+      return true;
+    }
+    
+    return false;
+  };
+
+  // Handle removing a mentee from the conflict
+  const handleRemoveMentee = async (menteeToRemove) => {
+    const isMenteeCreator = menteeToRemove.id === conflict.createdBy;
+    
+    if (isMenteeCreator) {
+      alert("Cannot remove the conflict creator.");
+      return;
+    }
+
+    // Check if this mentee has already accepted/responded
+    const hasAccepted = conflict.termsAcceptance?.acceptedBy?.includes(menteeToRemove.id);
+    const isMentor = conflict.mentor?.id === user.id;
+    
+    // Only mentor can remove after acceptance
+    if (hasAccepted && !isMentor) {
+      alert("Only the mentor can remove a mentee who has already accepted the terms.");
+      return;
+    }
+
+    const confirmMsg = hasAccepted
+      ? `"${menteeToRemove.name || menteeToRemove.email}" has already accepted the terms. Are you sure you want to remove them?`
+      : `Are you sure you want to remove "${menteeToRemove.name || menteeToRemove.email}" from this conflict?`;
+
+    if (!confirm(confirmMsg)) {
+      return;
+    }
+
+    setRemovingMentee(menteeToRemove.id);
+    try {
+      // Remove mentee from the list
+      const updatedMentees = conflict.mentees.filter(m => m.id !== menteeToRemove.id);
+      
+      // Also remove from termsAcceptance.acceptedBy if present
+      const updatedAcceptedBy = conflict.termsAcceptance?.acceptedBy?.filter(
+        id => id !== menteeToRemove.id
+      ) || [];
+
+      const updatedConflict = {
+        ...conflict,
+        mentees: updatedMentees,
+        termsAcceptance: {
+          ...conflict.termsAcceptance,
+          acceptedBy: updatedAcceptedBy
+        },
+        updatedAt: new Date().toISOString(),
+        updatedBy: user.id
+      };
+
+      await storage.set(`conflict:${conflict.id}`, updatedConflict, true);
+      await onUpdate();
+      
+      alert(`"${menteeToRemove.name || menteeToRemove.email}" has been removed from the conflict.`);
+    } catch (error) {
+      console.error('Error removing mentee:', error);
+      alert('Failed to remove participant. Please try again.');
+    } finally {
+      setRemovingMentee(null);
+    }
+  };
 
   // Check if resend is available (30 minutes after last send)
   const canResendEmails = () => {
@@ -4449,6 +4536,7 @@ function ConflictOverview({ conflict, user, onUpdate }) {
             const hasResponded = conflict.termsAcceptance?.acceptedBy?.includes(mentee.id) ||
                                 conflict.steps?.identifyDefine?.data?.[mentee.id];
             const isCreator = mentee.id === conflict.createdBy;
+            const canRemove = canRemoveMentee(mentee);
             
             return (
               <div key={idx} className="flex items-center gap-3 p-4 bg-stone-50 rounded-lg">
@@ -4474,6 +4562,20 @@ function ConflictOverview({ conflict, user, onUpdate }) {
                     )}
                   </div>
                 </div>
+                {canRemove && (
+                  <button
+                    onClick={() => handleRemoveMentee(mentee)}
+                    disabled={removingMentee === mentee.id}
+                    className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                    title="Remove participant"
+                  >
+                    {removingMentee === mentee.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <XCircle className="w-4 h-4" />
+                    )}
+                  </button>
+                )}
               </div>
             );
           })}
