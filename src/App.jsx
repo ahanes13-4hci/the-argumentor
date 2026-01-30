@@ -9,12 +9,10 @@ const FIREBASE_CONFIG = {
   projectId: "argumentor-ff17a",
   storageBucket: "argumentor-ff17a.firebasestorage.app",
   messagingSenderId: "347151341699",
-  appId: "1:347151341699:web:a1b2c3d4e5f6g7h8i9j0" // You may need to update this from Firebase console
+  appId: "1:347151341699:web:a1b2c3d4e5f6g7h8i9j0"
 };
 
 // Firebase initialization
-let firebaseApp = null;
-let firebaseDb = null;
 let firebaseInitialized = false;
 let firebaseInitPromise = null;
 
@@ -22,36 +20,55 @@ const initFirebase = async () => {
   if (firebaseInitialized) return true;
   if (firebaseInitPromise) return firebaseInitPromise;
   
-  firebaseInitPromise = (async () => {
-    try {
-      // Dynamically import Firebase
-      const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js');
-      const { getDatabase, ref, get, set, remove, query, orderByKey, startAt, endAt } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js');
-      
-      // Initialize Firebase
-      firebaseApp = initializeApp(FIREBASE_CONFIG);
-      firebaseDb = getDatabase(firebaseApp);
-      
-      // Store the database functions globally for use in storage
-      window.firebaseDb = firebaseDb;
-      window.firebaseRef = ref;
-      window.firebaseGet = get;
-      window.firebaseSet = set;
-      window.firebaseRemove = remove;
-      window.firebaseQuery = query;
-      window.firebaseOrderByKey = orderByKey;
-      window.firebaseStartAt = startAt;
-      window.firebaseEndAt = endAt;
-      
-      firebaseInitialized = true;
-      console.log('Firebase initialized successfully');
-      return true;
-    } catch (error) {
-      console.error('Firebase initialization error:', error);
-      firebaseInitPromise = null;
-      return false;
+  firebaseInitPromise = new Promise((resolve) => {
+    // Check if Firebase is already loaded
+    if (window.firebase && window.firebase.database) {
+      try {
+        if (!window.firebaseApp) {
+          window.firebaseApp = window.firebase.initializeApp(FIREBASE_CONFIG);
+        }
+        window.firebaseDb = window.firebase.database();
+        firebaseInitialized = true;
+        console.log('Firebase initialized successfully');
+        resolve(true);
+      } catch (error) {
+        console.error('Firebase init error:', error);
+        resolve(false);
+      }
+      return;
     }
-  })();
+    
+    // Load Firebase via script tags
+    const loadScript = (src) => {
+      return new Promise((res, rej) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = res;
+        script.onerror = rej;
+        document.head.appendChild(script);
+      });
+    };
+    
+    // Load Firebase scripts sequentially
+    loadScript('https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js')
+      .then(() => loadScript('https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js'))
+      .then(() => {
+        try {
+          window.firebaseApp = window.firebase.initializeApp(FIREBASE_CONFIG);
+          window.firebaseDb = window.firebase.database();
+          firebaseInitialized = true;
+          console.log('Firebase initialized successfully');
+          resolve(true);
+        } catch (error) {
+          console.error('Firebase init error:', error);
+          resolve(false);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load Firebase scripts:', error);
+        resolve(false);
+      });
+  });
   
   return firebaseInitPromise;
 };
@@ -236,11 +253,10 @@ const storage = {
       const firebaseKey = storage.toFirebaseKey(key);
       
       // Try Firebase first
-      await initFirebase();
-      if (window.firebaseDb && window.firebaseRef && window.firebaseGet) {
+      const fbReady = await initFirebase();
+      if (fbReady && window.firebaseDb) {
         try {
-          const dbRef = window.firebaseRef(window.firebaseDb, `data/${firebaseKey}`);
-          const snapshot = await window.firebaseGet(dbRef);
+          const snapshot = await window.firebaseDb.ref(`data/${firebaseKey}`).once('value');
           if (snapshot.exists()) {
             const value = snapshot.val();
             console.log(`Firebase get ${key}:`, value ? 'found' : 'null');
@@ -296,11 +312,10 @@ const storage = {
       const firebaseKey = storage.toFirebaseKey(key);
       
       // Try Firebase first
-      await initFirebase();
-      if (window.firebaseDb && window.firebaseRef && window.firebaseSet) {
+      const fbReady = await initFirebase();
+      if (fbReady && window.firebaseDb) {
         try {
-          const dbRef = window.firebaseRef(window.firebaseDb, `data/${firebaseKey}`);
-          await window.firebaseSet(dbRef, value);
+          await window.firebaseDb.ref(`data/${firebaseKey}`).set(value);
           console.log(`Firebase set ${key}: success`);
           return true;
         } catch (fbError) {
@@ -331,11 +346,10 @@ const storage = {
       const firebasePrefix = storage.toFirebaseKey(prefix);
       
       // Try Firebase first
-      await initFirebase();
-      if (window.firebaseDb && window.firebaseRef && window.firebaseGet) {
+      const fbReady = await initFirebase();
+      if (fbReady && window.firebaseDb) {
         try {
-          const dbRef = window.firebaseRef(window.firebaseDb, 'data');
-          const snapshot = await window.firebaseGet(dbRef);
+          const snapshot = await window.firebaseDb.ref('data').once('value');
           if (snapshot.exists()) {
             const allData = snapshot.val();
             const keys = Object.keys(allData)
@@ -381,11 +395,10 @@ const storage = {
       const firebaseKey = storage.toFirebaseKey(key);
       
       // Try Firebase first
-      await initFirebase();
-      if (window.firebaseDb && window.firebaseRef && window.firebaseRemove) {
+      const fbReady = await initFirebase();
+      if (fbReady && window.firebaseDb) {
         try {
-          const dbRef = window.firebaseRef(window.firebaseDb, `data/${firebaseKey}`);
-          await window.firebaseRemove(dbRef);
+          await window.firebaseDb.ref(`data/${firebaseKey}`).remove();
           console.log(`Firebase delete ${key}: success`);
           return true;
         } catch (fbError) {
@@ -412,8 +425,8 @@ const storage = {
   
   // Check which storage backend is active
   getBackendInfo: async () => {
-    await initFirebase();
-    if (window.firebaseDb) {
+    const fbReady = await initFirebase();
+    if (fbReady && window.firebaseDb) {
       return { backend: 'firebase', available: true };
     }
     if (window.storage) {
@@ -424,8 +437,8 @@ const storage = {
   
   // Migration: Copy data from localStorage/Claude to Firebase
   migrateToFirebase: async () => {
-    await initFirebase();
-    if (!window.firebaseDb) {
+    const fbReady = await initFirebase();
+    if (!fbReady || !window.firebaseDb) {
       console.log('Firebase not available for migration');
       return { migrated: 0 };
     }
@@ -439,8 +452,7 @@ const storage = {
         try {
           const value = JSON.parse(localStorage.getItem(key));
           const firebaseKey = storage.toFirebaseKey(key);
-          const dbRef = window.firebaseRef(window.firebaseDb, `data/${firebaseKey}`);
-          await window.firebaseSet(dbRef, value);
+          await window.firebaseDb.ref(`data/${firebaseKey}`).set(value);
           migrated++;
           console.log(`Migrated ${key} to Firebase`);
         } catch (e) {
