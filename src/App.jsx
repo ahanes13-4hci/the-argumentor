@@ -179,11 +179,39 @@ const storage = {
       // Try window.storage first
       if (window.storage && window.storage.get) {
         const result = await window.storage.get(key, isShared);
-        return result ? JSON.parse(result.value) : null;
+        if (!result) return null;
+        
+        let parsed = JSON.parse(result.value);
+        
+        // Handle double-stringified legacy data
+        // If after parsing we still have a string that looks like JSON, parse again
+        if (typeof parsed === 'string' && (parsed.startsWith('{') || parsed.startsWith('['))) {
+          try {
+            parsed = JSON.parse(parsed);
+            console.log(`Fixed double-stringified data for key: ${key}`);
+          } catch (e) {
+            // Not double-stringified, use as-is
+          }
+        }
+        
+        return parsed;
       }
       // Fallback to localStorage
       const item = localStorage.getItem(key);
-      return item ? JSON.parse(item) : null;
+      if (!item) return null;
+      
+      let parsed = JSON.parse(item);
+      
+      // Handle double-stringified legacy data
+      if (typeof parsed === 'string' && (parsed.startsWith('{') || parsed.startsWith('['))) {
+        try {
+          parsed = JSON.parse(parsed);
+        } catch (e) {
+          // Not double-stringified, use as-is
+        }
+      }
+      
+      return parsed;
     } catch (error) {
       console.error('Storage get error:', error);
       return null;
@@ -1887,6 +1915,63 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
                 <RefreshCw className="w-4 h-4" />
               )}
               <span className="hidden sm:inline">Sync Data</span>
+            </button>
+            <button
+              onClick={async () => {
+                setActionLoading('repair');
+                try {
+                  // Find and fix double-stringified conflicts
+                  const conflictKeys = await storage.list('conflict:', true);
+                  let repaired = 0;
+                  
+                  for (const key of conflictKeys) {
+                    try {
+                      // Get raw value from window.storage
+                      if (window.storage && window.storage.get) {
+                        const result = await window.storage.get(key, true);
+                        if (result && result.value) {
+                          let parsed = JSON.parse(result.value);
+                          
+                          // Check if it's double-stringified (still a string after first parse)
+                          if (typeof parsed === 'string' && (parsed.startsWith('{') || parsed.startsWith('['))) {
+                            // It's double-stringified, fix it
+                            const fixed = JSON.parse(parsed);
+                            await window.storage.set(key, JSON.stringify(fixed), true);
+                            console.log(`Repaired double-stringified conflict: ${key}`, fixed.title);
+                            repaired++;
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      console.error(`Error checking/repairing ${key}:`, e);
+                    }
+                  }
+                  
+                  // Reload data
+                  await reloadData();
+                  
+                  if (repaired > 0) {
+                    alert(`Repair complete!\n\n${repaired} conflict(s) had corrupted data and were fixed.`);
+                  } else {
+                    alert('Repair complete!\n\nNo corrupted data found. All conflicts are OK.');
+                  }
+                } catch (error) {
+                  console.error('Repair error:', error);
+                  alert('Repair failed. Check console for details.');
+                } finally {
+                  setActionLoading(null);
+                }
+              }}
+              disabled={actionLoading === 'repair'}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+              title="Repair corrupted conflict data"
+            >
+              {actionLoading === 'repair' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <CheckCircle className="w-4 h-4" />
+              )}
+              <span className="hidden sm:inline">Repair Data</span>
             </button>
             <button
               onClick={() => setShowCreateUserModal(true)}
