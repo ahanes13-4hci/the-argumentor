@@ -1637,6 +1637,78 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
           <div className="flex items-center gap-2">
             <button
               onClick={async () => {
+                setActionLoading('test-data');
+                try {
+                  // Create test conflict: Archer's Party Location
+                  const testConflict = {
+                    id: `conflict-test-${Date.now()}`,
+                    title: "Archer's Party Location Disagreement",
+                    model: "personal",
+                    problemStatement: {
+                      who: "Parents (Mom and Dad) planning Archer's birthday party",
+                      what: "We originally planned an outdoor party but weather forecast shows rain. Now we can't agree on an alternative indoor location.",
+                      where: "Originally planned for backyard, now considering: living room, garage, local community center, or indoor play place",
+                      when: "Party is scheduled for this Saturday at 2pm. Need to decide by Thursday to notify guests of any venue change.",
+                      how: "Mom wants to book the indoor play place (more fun for kids but expensive). Dad prefers the garage (free but needs cleaning and setup). We've been going back and forth without resolution."
+                    },
+                    desiredOutcome: "Agree on a party location that works within our budget, provides a fun experience for Archer and friends, and can be confirmed in time to notify guests.",
+                    actualOutcome: "",
+                    status: "pending-acceptance",
+                    statusHistory: [
+                      { status: "pending-acceptance", timestamp: new Date().toISOString() }
+                    ],
+                    createdBy: user.id,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    updatedBy: user.id,
+                    responseHours: "9-5",
+                    responseWaitTime: 15,
+                    responseWindow: 15,
+                    termsAcceptance: {
+                      required: true,
+                      acceptedBy: [user.id],
+                      proposedChanges: {},
+                      status: "pending"
+                    },
+                    mentees: [],
+                    mentor: null,
+                    flyOnWall: null,
+                    omniscient: null,
+                    comments: [],
+                    steps: {
+                      identifyDefine: { completed: false, data: {} },
+                      communicate: { completed: false, cycles: [], acknowledged: false },
+                      exploreAlternatives: { completed: false, alternatives: [] },
+                      evaluateSelect: { completed: false, ratings: {}, selected: null },
+                      agreeImplement: { completed: false, acknowledged: [] },
+                      followUp: { completed: false, ratings: {} }
+                    }
+                  };
+                  
+                  await storage.set(`conflict:${testConflict.id}`, testConflict, true);
+                  await reloadData();
+                  
+                  alert(`Test conflict created!\n\nTitle: "${testConflict.title}"\n\nNo mentees assigned - you can add participants from this panel.`);
+                } catch (error) {
+                  console.error('Error creating test data:', error);
+                  alert('Failed to create test data. Check console for details.');
+                } finally {
+                  setActionLoading(null);
+                }
+              }}
+              disabled={actionLoading === 'test-data'}
+              className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+              title="Load test conflict data"
+            >
+              {actionLoading === 'test-data' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <FileText className="w-4 h-4" />
+              )}
+              <span className="hidden sm:inline">Load Test Data</span>
+            </button>
+            <button
+              onClick={async () => {
                 setActionLoading('sync');
                 try {
                   // Run migrations
