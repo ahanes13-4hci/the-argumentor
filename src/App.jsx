@@ -2864,6 +2864,14 @@ function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateCo
   const [filter, setFilter] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Debug: Log what we received
+  console.log('=== DASHBOARD RENDER ===');
+  console.log('User:', user);
+  console.log('User email:', user?.email);
+  console.log('User ID:', user?.id);
+  console.log('Total conflicts received:', conflicts?.length);
+  console.log('All conflicts:', conflicts);
+
   // Reload conflicts when dashboard mounts or when conflicts array is empty
   useEffect(() => {
     console.log('Dashboard effect triggered, conflicts count:', conflicts.length);
