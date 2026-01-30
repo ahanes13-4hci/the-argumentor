@@ -724,6 +724,46 @@ function LoginView({ onLogin, pendingInvite }) {
       const saved = await storage.set('all-users', updatedUsers, true);
       console.log('Users saved successfully:', saved);
 
+      // Link user to any existing conflict invitations by email
+      try {
+        console.log('Checking for existing conflict invitations...');
+        const conflictKeys = await storage.list('conflict:', true);
+        let linkedConflicts = 0;
+        
+        for (const key of conflictKeys) {
+          try {
+            const conflict = await storage.get(key, true);
+            if (conflict?.mentees) {
+              const menteeIndex = conflict.mentees.findIndex(
+                m => m.email?.toLowerCase() === newUser.email.toLowerCase() && m.id?.startsWith('mentee-')
+              );
+              
+              if (menteeIndex !== -1) {
+                // Update mentee entry with real user ID and name
+                conflict.mentees[menteeIndex] = {
+                  ...conflict.mentees[menteeIndex],
+                  id: newUser.id,
+                  name: newUser.name
+                };
+                conflict.updatedAt = new Date().toISOString();
+                await storage.set(key, conflict, true);
+                linkedConflicts++;
+                console.log(`Linked user to conflict: ${conflict.title}`);
+              }
+            }
+          } catch (conflictErr) {
+            console.error(`Error checking conflict ${key}:`, conflictErr);
+          }
+        }
+        
+        if (linkedConflicts > 0) {
+          console.log(`Linked user to ${linkedConflicts} existing conflict(s)`);
+        }
+      } catch (linkErr) {
+        console.error('Error linking user to conflicts:', linkErr);
+        // Don't block signup if linking fails
+      }
+
       // Login the new user
       console.log('Calling onLogin with new user');
       await onLogin(newUser);
@@ -2722,7 +2762,7 @@ function CreateConflictView({ user, onBack, onCreated }) {
         },
         mentees: formData.menteeEmails.filter(e => e.trim()).map((email, idx) => ({
           id: `mentee-${Date.now()}-${idx}`,
-          email,
+          email: email.toLowerCase(),
           name: email.split('@')[0],
           role: 'mentee',
           invited: true
