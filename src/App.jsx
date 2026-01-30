@@ -1923,9 +1923,16 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
                   // Find and fix double-stringified conflicts
                   const conflictKeys = await storage.list('conflict:', true);
                   let repaired = 0;
+                  let linked = 0;
+                  
+                  // Get all users for linking
+                  const allUsersList = await storage.get('all-users', true) || [];
                   
                   for (const key of conflictKeys) {
                     try {
+                      let conflict = null;
+                      let needsSave = false;
+                      
                       // Get raw value from window.storage
                       if (window.storage && window.storage.get) {
                         const result = await window.storage.get(key, true);
@@ -1935,12 +1942,77 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
                           // Check if it's double-stringified (still a string after first parse)
                           if (typeof parsed === 'string' && (parsed.startsWith('{') || parsed.startsWith('['))) {
                             // It's double-stringified, fix it
-                            const fixed = JSON.parse(parsed);
-                            await window.storage.set(key, JSON.stringify(fixed), true);
-                            console.log(`Repaired double-stringified conflict: ${key}`, fixed.title);
+                            conflict = JSON.parse(parsed);
+                            needsSave = true;
                             repaired++;
+                            console.log(`Repaired double-stringified conflict: ${key}`, conflict.title);
+                          } else {
+                            conflict = parsed;
                           }
                         }
+                      }
+                      
+                      // Link users to mentee entries that still have mentee- IDs
+                      if (conflict && conflict.mentees) {
+                        for (let i = 0; i < conflict.mentees.length; i++) {
+                          const mentee = conflict.mentees[i];
+                          
+                          // Check if this mentee has a temporary ID and needs linking
+                          if (mentee.id?.startsWith('mentee-') && mentee.email) {
+                            // Find a user with matching email
+                            const matchingUser = allUsersList.find(
+                              u => u.email?.toLowerCase() === mentee.email.toLowerCase()
+                            );
+                            
+                            if (matchingUser) {
+                              // Check if this user is already linked elsewhere in mentees
+                              const alreadyLinked = conflict.mentees.some(
+                                m => m.id === matchingUser.id
+                              );
+                              
+                              if (!alreadyLinked) {
+                                // Link the user
+                                conflict.mentees[i] = {
+                                  ...mentee,
+                                  id: matchingUser.id,
+                                  name: matchingUser.name
+                                };
+                                needsSave = true;
+                                linked++;
+                                console.log(`Linked ${matchingUser.email} to conflict: ${conflict.title}`);
+                              } else {
+                                // User already linked, remove the duplicate mentee- entry
+                                conflict.mentees.splice(i, 1);
+                                i--; // Adjust index after removal
+                                needsSave = true;
+                                console.log(`Removed duplicate mentee entry for ${mentee.email} in: ${conflict.title}`);
+                              }
+                            }
+                          }
+                        }
+                        
+                        // Remove duplicate mentee entries (same email appearing multiple times)
+                        const seenEmails = new Set();
+                        const uniqueMentees = [];
+                        for (const mentee of conflict.mentees) {
+                          const email = mentee.email?.toLowerCase();
+                          if (email && !seenEmails.has(email)) {
+                            seenEmails.add(email);
+                            uniqueMentees.push(mentee);
+                          } else if (email && seenEmails.has(email)) {
+                            console.log(`Removing duplicate mentee ${email} from: ${conflict.title}`);
+                            needsSave = true;
+                          }
+                        }
+                        if (uniqueMentees.length !== conflict.mentees.length) {
+                          conflict.mentees = uniqueMentees;
+                        }
+                      }
+                      
+                      // Save if any changes were made
+                      if (needsSave && conflict) {
+                        conflict.updatedAt = new Date().toISOString();
+                        await window.storage.set(key, JSON.stringify(conflict), true);
                       }
                     } catch (e) {
                       console.error(`Error checking/repairing ${key}:`, e);
@@ -1950,11 +2022,18 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
                   // Reload data
                   await reloadData();
                   
+                  let message = 'Repair complete!\n\n';
                   if (repaired > 0) {
-                    alert(`Repair complete!\n\n${repaired} conflict(s) had corrupted data and were fixed.`);
-                  } else {
-                    alert('Repair complete!\n\nNo corrupted data found. All conflicts are OK.');
+                    message += `• ${repaired} conflict(s) had corrupted data and were fixed\n`;
                   }
+                  if (linked > 0) {
+                    message += `• ${linked} user(s) were linked to their conflict invitations\n`;
+                  }
+                  if (repaired === 0 && linked === 0) {
+                    message += 'No issues found. All data is OK.';
+                  }
+                  
+                  alert(message);
                 } catch (error) {
                   console.error('Repair error:', error);
                   alert('Repair failed. Check console for details.');
@@ -1964,7 +2043,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
               }}
               disabled={actionLoading === 'repair'}
               className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
-              title="Repair corrupted conflict data"
+              title="Repair corrupted conflict data and link users"
             >
               {actionLoading === 'repair' ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -4275,6 +4354,11 @@ function ConflictOverview({ conflict, user, onUpdate }) {
       // Remove mentee from the list
       const updatedMentees = conflict.mentees.filter(m => m.id !== menteeToRemove.id);
       
+      console.log('=== REMOVE MENTEE DEBUG ===');
+      console.log('Original mentees:', conflict.mentees);
+      console.log('Removing:', menteeToRemove);
+      console.log('Updated mentees:', updatedMentees);
+      
       // Also remove from termsAcceptance.acceptedBy if present
       const updatedAcceptedBy = conflict.termsAcceptance?.acceptedBy?.filter(
         id => id !== menteeToRemove.id
@@ -4291,7 +4375,18 @@ function ConflictOverview({ conflict, user, onUpdate }) {
         updatedBy: user.id
       };
 
-      await storage.set(`conflict:${conflict.id}`, updatedConflict, true);
+      console.log('Saving updated conflict:', updatedConflict);
+      console.log('Conflict ID:', conflict.id);
+      
+      const saveResult = await storage.set(`conflict:${conflict.id}`, updatedConflict, true);
+      console.log('Save result:', saveResult);
+      
+      // Verify the save by reading it back
+      const verification = await storage.get(`conflict:${conflict.id}`, true);
+      console.log('Verification read:', verification);
+      console.log('Verified mentees count:', verification?.mentees?.length);
+      console.log('=== END REMOVE MENTEE DEBUG ===');
+      
       await onUpdate();
       
       alert(`"${menteeToRemove.name || menteeToRemove.email}" has been removed from the conflict.`);
