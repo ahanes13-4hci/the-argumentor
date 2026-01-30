@@ -3076,6 +3076,27 @@ function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateCo
               <MessageSquare className="w-16 h-16 text-stone-300 mx-auto mb-4" />
               <p className="text-stone-500 text-lg font-light">No conflicts yet</p>
               <p className="text-stone-400 text-sm mt-2">Create your first conflict to get started</p>
+              
+              {/* Debug info - temporary */}
+              <div className="mt-8 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-left text-xs">
+                <p className="font-bold text-yellow-800 mb-2">Debug Info:</p>
+                <p className="text-yellow-700">Your email: {user?.email || 'unknown'}</p>
+                <p className="text-yellow-700">Your ID: {user?.id || 'unknown'}</p>
+                <p className="text-yellow-700">Total conflicts loaded: {conflicts?.length || 0}</p>
+                <p className="text-yellow-700">Your conflicts (filtered): {userConflicts?.length || 0}</p>
+                {conflicts?.length > 0 && (
+                  <div className="mt-2">
+                    <p className="font-bold text-yellow-800">All loaded conflicts:</p>
+                    {conflicts.map((c, i) => (
+                      <div key={i} className="mt-1 p-2 bg-white rounded border border-yellow-200">
+                        <p className="font-medium">{c.title || 'No title'}</p>
+                        <p>Mentee emails: {c.mentees?.map(m => m.email).join(', ') || 'none'}</p>
+                        <p>Your email match: {c.mentees?.some(m => m.email?.toLowerCase() === user?.email?.toLowerCase()) ? '✅ YES' : '❌ NO'}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
