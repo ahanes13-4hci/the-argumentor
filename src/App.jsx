@@ -2863,6 +2863,7 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
 function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateConflict, onRefresh, onUserManagement }) {
   const [filter, setFilter] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [debugInfo, setDebugInfo] = useState(null);
 
   // Debug: Log what we received
   console.log('=== DASHBOARD RENDER ===');
@@ -2871,6 +2872,32 @@ function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateCo
   console.log('User ID:', user?.id);
   console.log('Total conflicts received:', conflicts?.length);
   console.log('All conflicts:', conflicts);
+
+  // Fetch debug info on mount
+  useEffect(() => {
+    const fetchDebugInfo = async () => {
+      try {
+        const hasWindowStorage = !!(window.storage && window.storage.list);
+        let keys = [];
+        let rawListResult = null;
+        
+        if (hasWindowStorage) {
+          rawListResult = await window.storage.list('conflict:', true);
+          keys = Array.isArray(rawListResult) ? rawListResult : (rawListResult?.keys || []);
+        }
+        
+        setDebugInfo({
+          hasWindowStorage,
+          rawListResult: JSON.stringify(rawListResult),
+          keyCount: keys.length,
+          keys: keys.slice(0, 5) // First 5 keys
+        });
+      } catch (error) {
+        setDebugInfo({ error: error.message });
+      }
+    };
+    fetchDebugInfo();
+  }, []);
 
   // Reload conflicts when dashboard mounts or when conflicts array is empty
   useEffect(() => {
@@ -3082,10 +3109,26 @@ function DashboardView({ user, conflicts, onLogout, onSelectConflict, onCreateCo
                 <p className="font-bold text-yellow-800 mb-2">Debug Info:</p>
                 <p className="text-yellow-700">Your email: {user?.email || 'unknown'}</p>
                 <p className="text-yellow-700">Your ID: {user?.id || 'unknown'}</p>
-                <p className="text-yellow-700">Total conflicts loaded: {conflicts?.length || 0}</p>
+                <p className="text-yellow-700">Conflicts in state: {conflicts?.length || 0}</p>
                 <p className="text-yellow-700">Your conflicts (filtered): {userConflicts?.length || 0}</p>
+                
+                {debugInfo && (
+                  <div className="mt-2 pt-2 border-t border-yellow-300">
+                    <p className="font-bold text-yellow-800">Storage Debug:</p>
+                    <p className="text-yellow-700">window.storage exists: {debugInfo.hasWindowStorage ? '✅ YES' : '❌ NO'}</p>
+                    <p className="text-yellow-700">Keys found: {debugInfo.keyCount ?? 'error'}</p>
+                    <p className="text-yellow-700 break-all">Raw list result: {debugInfo.rawListResult || 'null'}</p>
+                    {debugInfo.keys && debugInfo.keys.length > 0 && (
+                      <p className="text-yellow-700">First keys: {debugInfo.keys.join(', ')}</p>
+                    )}
+                    {debugInfo.error && (
+                      <p className="text-red-600">Error: {debugInfo.error}</p>
+                    )}
+                  </div>
+                )}
+                
                 {conflicts?.length > 0 && (
-                  <div className="mt-2">
+                  <div className="mt-2 pt-2 border-t border-yellow-300">
                     <p className="font-bold text-yellow-800">All loaded conflicts:</p>
                     {conflicts.map((c, i) => (
                       <div key={i} className="mt-1 p-2 bg-white rounded border border-yellow-200">
