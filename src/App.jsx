@@ -502,15 +502,10 @@ export default function TheArgumentor() {
   const loadUserAndConflicts = async () => {
     setLoading(true);
     try {
-      // Run migration to copy private conflicts to shared storage
-      console.log('Running conflict migration...');
-      const migrationResult = await storage.migrateConflictsToShared();
-      console.log('Migration result:', migrationResult);
-      
-      // Run migration to copy private users to shared storage
-      console.log('Running user migration...');
-      const userMigrationResult = await storage.migrateUsersToShared();
-      console.log('User migration result:', userMigrationResult);
+      // Initialize Firebase and check backend
+      console.log('Initializing storage backend...');
+      const backendInfo = await storage.getBackendInfo();
+      console.log('Storage backend:', backendInfo);
       
       const user = await storage.get('current-user');
       if (user) {
@@ -1984,32 +1979,31 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
               onClick={async () => {
                 setActionLoading('sync');
                 try {
-                  // Run migrations
-                  const conflictResult = await storage.migrateConflictsToShared();
-                  const userResult = await storage.migrateUsersToShared();
-                  console.log('Sync results:', { conflictResult, userResult });
+                  // Migrate data to Firebase
+                  const result = await storage.migrateToFirebase();
+                  console.log('Migration results:', result);
                   
                   // Reload data
                   await reloadData();
                   
-                  alert(`Sync complete!\nConflicts migrated: ${conflictResult.migrated}\nUsers migrated: ${userResult.migrated}`);
+                  alert(`Migration complete!\n${result.migrated} item(s) migrated to Firebase.`);
                 } catch (error) {
                   console.error('Sync error:', error);
-                  alert('Sync failed. Check console for details.');
+                  alert('Migration failed. Check console for details.');
                 } finally {
                   setActionLoading(null);
                 }
               }}
               disabled={actionLoading === 'sync'}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
-              title="Sync data from private to shared storage"
+              title="Migrate local data to Firebase"
             >
               {actionLoading === 'sync' ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <RefreshCw className="w-4 h-4" />
               )}
-              <span className="hidden sm:inline">Sync Data</span>
+              <span className="hidden sm:inline">Sync to Firebase</span>
             </button>
             <button
               onClick={async () => {
