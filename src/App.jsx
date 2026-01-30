@@ -237,6 +237,24 @@ const storage = {
       return [];
     }
   },
+  delete: async (key, shared = null) => {
+    try {
+      // Determine if this should be shared
+      const isShared = shared !== null ? shared : (key.startsWith('conflict:') || key === 'all-users');
+      
+      // Try window.storage first
+      if (window.storage && window.storage.delete) {
+        await window.storage.delete(key, isShared);
+        return true;
+      }
+      // Fallback to localStorage
+      localStorage.removeItem(key);
+      return true;
+    } catch (error) {
+      console.error('Storage delete error:', error);
+      return false;
+    }
+  },
   // Migration: Copy conflicts from private to shared storage
   migrateConflictsToShared: async () => {
     try {
@@ -1127,6 +1145,138 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
     }
   };
 
+  // Delete user permanently
+  const deleteUser = async (targetUser) => {
+    if (targetUser.id === user.id) {
+      alert("You cannot delete your own account!");
+      return;
+    }
+    
+    // Check if user is involved in any conflicts
+    const userConflicts = getUserConflicts(targetUser.id);
+    
+    let confirmMsg = `Are you sure you want to permanently delete "${targetUser.name}"?\n\nThis action cannot be undone.`;
+    
+    if (userConflicts.length > 0) {
+      confirmMsg = `WARNING: "${targetUser.name}" is involved in ${userConflicts.length} conflict(s).\n\n` +
+        `Deleting this user will:\n` +
+        `• Remove them from all conflicts they're participating in\n` +
+        `• Their contributions (comments, alternatives, etc.) will remain but be orphaned\n\n` +
+        `Consider deactivating instead if you want to preserve their association with conflicts.\n\n` +
+        `Are you sure you want to permanently delete this user?`;
+    }
+    
+    if (!confirm(confirmMsg)) {
+      return;
+    }
+    
+    // Double confirmation for users with conflicts
+    if (userConflicts.length > 0) {
+      if (!confirm(`FINAL CONFIRMATION: Delete "${targetUser.name}" and remove them from ${userConflicts.length} conflict(s)?`)) {
+        return;
+      }
+    }
+    
+    setActionLoading(`delete-${targetUser.id}`);
+    try {
+      // Remove user from all conflicts they're involved in
+      for (const conflict of userConflicts) {
+        let updatedConflict = { ...conflict };
+        let needsUpdate = false;
+        
+        // Remove from mentees
+        if (conflict.mentees?.some(m => m.id === targetUser.id)) {
+          updatedConflict.mentees = conflict.mentees.filter(m => m.id !== targetUser.id);
+          needsUpdate = true;
+        }
+        
+        // Remove from mentor
+        if (conflict.mentor?.id === targetUser.id) {
+          updatedConflict.mentor = null;
+          needsUpdate = true;
+        }
+        
+        // Remove from flyOnWall
+        if (conflict.flyOnWall?.id === targetUser.id) {
+          updatedConflict.flyOnWall = null;
+          needsUpdate = true;
+        }
+        
+        // Remove from omniscient
+        if (conflict.omniscient?.id === targetUser.id) {
+          updatedConflict.omniscient = null;
+          needsUpdate = true;
+        }
+        
+        // Remove from termsAcceptance.acceptedBy
+        if (conflict.termsAcceptance?.acceptedBy?.includes(targetUser.id)) {
+          updatedConflict.termsAcceptance = {
+            ...conflict.termsAcceptance,
+            acceptedBy: conflict.termsAcceptance.acceptedBy.filter(id => id !== targetUser.id)
+          };
+          needsUpdate = true;
+        }
+        
+        if (needsUpdate) {
+          updatedConflict.updatedAt = new Date().toISOString();
+          await storage.set(`conflict:${conflict.id}`, updatedConflict, true);
+        }
+      }
+      
+      // Remove user from all-users list
+      const allUsersList = await storage.get('all-users', true) || [];
+      const updatedAllUsers = allUsersList.filter(u => u.id !== targetUser.id);
+      await storage.set('all-users', updatedAllUsers, true);
+      
+      // Update local state
+      setAllUsers(prev => prev.filter(u => u.id !== targetUser.id));
+      
+      // Reload data to reflect conflict changes
+      await reloadData();
+      
+      alert(`User "${targetUser.name}" has been permanently deleted.`);
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      alert('Failed to delete user. Check console for details.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Delete conflict permanently
+  const deleteConflict = async (conflict) => {
+    const confirmMsg = `Are you sure you want to permanently delete the conflict "${conflict.title}"?\n\n` +
+      `This will remove:\n` +
+      `• All participant assignments\n` +
+      `• All communication history\n` +
+      `• All proposed alternatives\n` +
+      `• All ratings and acknowledgments\n\n` +
+      `This action cannot be undone.`;
+    
+    if (!confirm(confirmMsg)) {
+      return;
+    }
+    
+    setActionLoading(`delete-conflict-${conflict.id}`);
+    try {
+      // Delete the conflict from storage
+      await storage.delete(`conflict:${conflict.id}`, true);
+      
+      // Update local state
+      setAllConflicts(prev => prev.filter(c => c.id !== conflict.id));
+      
+      // Refresh parent data
+      if (onRefresh) onRefresh();
+      
+      alert(`Conflict "${conflict.title}" has been permanently deleted.`);
+    } catch (error) {
+      console.error('Error deleting conflict:', error);
+      alert('Failed to delete conflict. Check console for details.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   // Remove user from conflict
   const removeFromConflict = async (conflict, roleType, targetUserId) => {
     setActionLoading(`${conflict.id}-${roleType}`);
@@ -1974,6 +2124,22 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
                           </button>
                         )}
                         
+                        {/* Delete User */}
+                        {targetUser.id !== user.id && (
+                          <button
+                            onClick={() => deleteUser(targetUser)}
+                            disabled={actionLoading === `delete-${targetUser.id}`}
+                            className="p-2 rounded-lg transition-colors hover:bg-red-50 text-red-600 disabled:opacity-50"
+                            title="Delete User Permanently"
+                          >
+                            {actionLoading === `delete-${targetUser.id}` ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                        
                         {/* Expand/Collapse */}
                         <button
                           onClick={() => setSelectedUser(isExpanded ? null : targetUser.id)}
@@ -2087,6 +2253,77 @@ function UserManagementView({ user, conflicts, onBack, onRefresh }) {
             })}
           </div>
         )}
+
+        {/* Conflicts Management Section */}
+        <div className="mt-8">
+          <h2 className="text-xl font-bold text-stone-800 mb-4">All Conflicts</h2>
+          {allConflicts.length === 0 ? (
+            <div className="bg-white rounded-xl p-8 shadow-sm border border-stone-200 text-center">
+              <FileText className="w-12 h-12 text-stone-300 mx-auto mb-3" />
+              <p className="text-stone-500">No conflicts found</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-stone-50 border-b border-stone-200">
+                    <tr>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wider">Title</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wider">Status</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wider">Participants</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wider">Created</th>
+                      <th className="text-right px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wider">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-200">
+                    {allConflicts
+                      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                      .map(conflict => (
+                        <tr key={conflict.id} className="hover:bg-stone-50">
+                          <td className="px-4 py-3">
+                            <div className="font-medium text-stone-800 truncate max-w-xs">{conflict.title}</div>
+                            <div className="text-xs text-stone-500 truncate max-w-xs">{conflict.problemStatement?.what}</div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                              conflict.status === 'resolved' ? 'bg-green-100 text-green-700' :
+                              conflict.status === 'pending-acceptance' ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-blue-100 text-blue-700'
+                            }`}>
+                              {(conflict.status || 'pending').replace(/-/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="text-sm text-stone-600">
+                              {conflict.mentees?.length || 0} mentee{(conflict.mentees?.length || 0) !== 1 ? 's' : ''}
+                              {conflict.mentor && ' • Mentor'}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-stone-500">
+                            {new Date(conflict.createdAt).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              onClick={() => deleteConflict(conflict)}
+                              disabled={actionLoading === `delete-conflict-${conflict.id}`}
+                              className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors disabled:opacity-50"
+                              title="Delete Conflict"
+                            >
+                              {actionLoading === `delete-conflict-${conflict.id}` ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-4 h-4" />
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Reassign Modal */}
